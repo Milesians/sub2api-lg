@@ -110,9 +110,6 @@ func TestExpiredReportIsNotReturned(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	admin := adminclient.New(cfg)
-	cache := entrypoints.NewCache(cfg, admin)
-	server := New(cfg, db, cache, probe.NewServerProbe(cfg))
 
 	err = db.CreateReport(context.Background(), store.Report{
 		ID:          "rpt_old",
@@ -125,7 +122,11 @@ func TestExpiredReportIsNotReturned(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	report, err := server.findReport(context.Background(), "rpt_old")
+	admin := adminclient.New(cfg)
+	cache := entrypoints.NewCache(cfg, admin)
+	_ = New(cfg, db, cache, probe.NewServerProbe(cfg))
+
+	report, err := db.GetReport(context.Background(), "rpt_old")
 	if err != nil {
 		t.Fatal(err)
 	}

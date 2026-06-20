@@ -36,6 +36,7 @@ type Server struct {
 const reportRetention = 72 * time.Hour
 
 func New(cfg *config.Config, db *store.Store, cache *entrypoints.Cache, serverProbe *probe.ServerProbe) *Server {
+	_ = db.DeleteReportsBefore(context.Background(), time.Now().Add(-reportRetention))
 	return &Server{
 		cfg:         cfg,
 		store:       db,
