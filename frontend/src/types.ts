@@ -1,7 +1,7 @@
 export interface BootstrapResponse {
   session_id: string
   session_token: string
-  user: { id?: string; username?: string; email?: string; role?: string; is_admin?: boolean; isAdmin?: boolean; admin?: boolean }
+  user: { id?: string; username?: string; email?: string; role?: string }
   app: { public_path: string; iframe_origin: string; theme?: string; lang?: string }
   probe: ProbeConfig
   entrypoint_count: number

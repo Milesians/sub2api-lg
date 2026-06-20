@@ -45,11 +45,7 @@ const manualURL = ref('')
 
 const isReportPage = computed(() => window.location.pathname.includes('/report/'))
 const token = computed(() => boot.value?.session_token || sessionStorage.getItem('sub2api_lg_session_token') || '')
-const isAdmin = computed(() => {
-  const user = boot.value?.user
-  const role = String(user?.role || '').toLowerCase()
-  return Boolean(user?.is_admin || user?.isAdmin || user?.admin || ['admin', 'administrator', 'root', 'super_admin', 'superadmin'].includes(role))
-})
+const isAdmin = computed(() => boot.value?.user?.role === 'admin')
 const entrypoints = computed(() => [...backendEntrypoints.value, ...manualEndpoints.value])
 const best = computed(() => [...results.value].sort((a, b) => b.browser.success_rate - a.browser.success_rate)[0])
 const rows = computed(() => entrypoints.value.map((endpoint) => ({
