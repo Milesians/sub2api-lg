@@ -33,11 +33,13 @@ type Server struct {
 	staticDir   string
 }
 
-const reportRetention = 72 * time.Hour
+const (
+	reportRetention       = 72 * time.Hour
+	reportCleanupInterval = time.Hour
+)
 
 func New(cfg *config.Config, db *store.Store, cache *entrypoints.Cache, serverProbe *probe.ServerProbe) *Server {
-	_ = db.DeleteReportsBefore(context.Background(), time.Now().Add(-reportRetention))
-	return &Server{
+	server := &Server{
 		cfg:         cfg,
 		store:       db,
 		cache:       cache,
@@ -46,6 +48,9 @@ func New(cfg *config.Config, db *store.Store, cache *entrypoints.Cache, serverPr
 		diag:        probe.NewDiagHandlers(cfg),
 		staticDir:   "frontend/dist",
 	}
+	server.cleanupExpiredReports(context.Background())
+	server.startReportCleanup()
+	return server
 }
 
 func (s *Server) Handler() http.Handler {
@@ -262,7 +267,7 @@ func (s *Server) createReport(w http.ResponseWriter, r *http.Request) {
 
 	reportID := "rpt_" + time.Now().Format("20060102_") + randomToken(12)
 	now := time.Now()
-	_ = s.store.DeleteReportsBefore(r.Context(), now.Add(-reportRetention))
+	s.cleanupExpiredReports(r.Context())
 	payload["report_id"] = reportID
 	payload["created_at"] = now.Format(time.RFC3339)
 	sanitizeReportPayload(payload)
@@ -366,10 +371,24 @@ func (s *Server) findReport(ctx context.Context, id string) (*store.Report, erro
 		return report, err
 	}
 	if time.Since(report.CreatedAt) > reportRetention {
-		_ = s.store.DeleteReportsBefore(ctx, time.Now().Add(-reportRetention))
+		s.cleanupExpiredReports(ctx)
 		return nil, nil
 	}
 	return report, nil
+}
+
+func (s *Server) startReportCleanup() {
+	go func() {
+		ticker := time.NewTicker(reportCleanupInterval)
+		defer ticker.Stop()
+		for range ticker.C {
+			s.cleanupExpiredReports(context.Background())
+		}
+	}()
+}
+
+func (s *Server) cleanupExpiredReports(ctx context.Context) {
+	_ = s.store.DeleteReportsBefore(ctx, time.Now().Add(-reportRetention))
 }
 
 func (s *Server) serveAsset(w http.ResponseWriter, r *http.Request) {
