@@ -120,7 +120,7 @@ func (s *Server) withCORS(next http.Handler) http.Handler {
 			w.Header().Set("Access-Control-Allow-Origin", "*")
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Requested-With")
-			w.Header().Set("Access-Control-Expose-Headers", "Server-Timing, X-Request-Id, Content-Length")
+			w.Header().Set("Access-Control-Expose-Headers", "Server-Timing, X-Request-Id, Content-Length, X-Origin-Peer-IP")
 			w.Header().Set("Timing-Allow-Origin", "*")
 			if r.Method == http.MethodOptions {
 				w.WriteHeader(http.StatusNoContent)
@@ -228,7 +228,7 @@ func (s *Server) bootstrap(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "create session failed", http.StatusInternalServerError)
 		return
 	}
-	snapshot, _ := s.cache.Get(r.Context(), false)
+	snapshot, _ := s.cache.Get(r.Context(), true)
 	writeJSON(w, map[string]any{
 		"session_id":    sessionID,
 		"session_token": sessionToken,
@@ -247,8 +247,7 @@ func (s *Server) bootstrap(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) entrypoints(w http.ResponseWriter, r *http.Request) {
-	refresh := r.URL.Query().Get("refresh") == "1" || r.URL.Query().Get("refresh") == "true"
-	snapshot, err := s.cache.Get(r.Context(), refresh)
+	snapshot, err := s.cache.Get(r.Context(), true)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return

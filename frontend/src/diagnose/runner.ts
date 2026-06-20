@@ -6,6 +6,8 @@ import { testDiagStream } from './stream-test'
 
 export type TestKind = 'ping' | 'download' | 'upload' | 'stream'
 
+const minPingSamples = 20
+
 export interface DiagnoseProgressEvent {
   endpoint_id: string
   kind: TestKind
@@ -16,6 +18,7 @@ export interface DiagnoseProgressEvent {
   ttfb_ms?: number | null
   ttft_ms?: number | null
   mbps?: number | null
+  origin_peer_ip?: string
   error_message?: string
   sample_index: number
   sample_total: number
@@ -36,20 +39,22 @@ export async function diagnoseEndpoint(
   const downloadResults: SizedFetchResult[] = []
   const uploadResults: SizedFetchResult[] = []
   const sizes = normalizedSizes(probe.blob_sizes)
-  const totalSteps = probe.browser_repeat + sizes.length * 2 + 1
+  const pingSamples = Math.max(probe.browser_repeat, minPingSamples)
+  const totalSteps = pingSamples + sizes.length * 2 + 1
   let step = 0
 
-  for (let i = 0; i < probe.browser_repeat; i += 1) {
+  for (let i = 0; i < pingSamples; i += 1) {
     const result = await timedFetch(withNonce(joinURL(endpoint.lg_base_url, probe.paths.ping)), probe.browser_timeout_ms)
     pingResults.push(result)
     step += 1
     onProgress?.({
       endpoint_id: endpoint.id,
       kind: 'ping',
-      label: `Ping ${i + 1}/${probe.browser_repeat}`,
+      label: `Ping ${i + 1}/${pingSamples}`,
       ok: result.ok,
       duration_ms: result.duration_ms,
       ttfb_ms: result.ttfb_ms ?? null,
+      origin_peer_ip: result.origin_peer_ip,
       error_message: result.error_message,
       sample_index: step,
       sample_total: totalSteps,
@@ -132,6 +137,7 @@ export async function diagnoseEndpoint(
   ]
   const totalCount = fetchResults.length + 1
   const successCount = fetchResults.filter((item) => item.ok).length + (stream.ok ? 1 : 0)
+  const pingSuccessCount = pingResults.filter((item) => item.ok).length
   const durations = pingResults.filter((item) => item.ok).map((item) => item.duration_ms)
   const ttfbValues = pingResults.filter((item) => item.ok && item.ttfb_ms != null).map((item) => item.ttfb_ms as number)
   const p50Duration = percentile(durations, 50)
@@ -146,6 +152,7 @@ export async function diagnoseEndpoint(
   const uploadBySize = speedBySize(uploadResults)
   const summary: BrowserSummary = {
     success_rate: ratio(successCount, totalCount),
+    ping_success_rate: ratio(pingSuccessCount, pingResults.length),
     http_loss_rate: ratio(totalCount - successCount, totalCount),
     p50_duration_ms: p50Duration,
     p95_duration_ms: p95Duration,

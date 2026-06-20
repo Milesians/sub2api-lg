@@ -8,6 +8,7 @@ type RunStatus = 'idle' | 'running' | 'done' | 'failed'
 
 interface LiveMetrics {
   successRate: number | null
+  pingSuccessRate: number | null
   avgPing: number | null
   avgTTFB: number | null
   avgTTFT: number | null
@@ -28,7 +29,8 @@ const loading = ref(true)
 const running = ref(false)
 const error = ref('')
 const boot = ref<BootstrapResponse | null>(null)
-const entrypoints = ref<EntryPoint[]>([])
+const backendEntrypoints = ref<EntryPoint[]>([])
+const manualEndpoints = ref<EntryPoint[]>([])
 const selectedIds = ref<string[]>([])
 const runStates = ref<Record<string, EndpointRunState>>({})
 const results = ref<EndpointResult[]>([])
@@ -37,9 +39,17 @@ const shareURL = ref('')
 const reportJSON = ref<unknown>(null)
 const progress = ref('')
 const cfTrace = ref<Record<string, string> | null>(null)
+const manualName = ref('')
+const manualURL = ref('')
 
 const isReportPage = computed(() => window.location.pathname.includes('/report/'))
 const token = computed(() => boot.value?.session_token || sessionStorage.getItem('sub2api_lg_session_token') || '')
+const isAdmin = computed(() => {
+  const user = boot.value?.user
+  const role = String(user?.role || '').toLowerCase()
+  return Boolean(user?.is_admin || user?.isAdmin || user?.admin || ['admin', 'administrator', 'root', 'super_admin', 'superadmin'].includes(role))
+})
+const entrypoints = computed(() => [...backendEntrypoints.value, ...manualEndpoints.value])
 const best = computed(() => [...results.value].sort((a, b) => b.browser.success_rate - a.browser.success_rate)[0])
 const rows = computed(() => entrypoints.value.map((endpoint) => ({
   endpoint,
@@ -55,6 +65,7 @@ const aggregate = computed(() => {
   const states = selectedIds.value.map((id) => endpointState(id)).filter((state) => state.samples.length > 0 || state.result)
   return {
     successRate: averageMetric(states.map((state) => state.metrics.successRate)),
+    pingSuccessRate: averageMetric(states.map((state) => state.metrics.pingSuccessRate)),
     avgPing: averageMetric(states.map((state) => state.metrics.avgPing)),
     avgTTFB: averageMetric(states.map((state) => state.metrics.avgTTFB)),
     avgTTFT: averageMetric(states.map((state) => state.metrics.avgTTFT)),
@@ -70,7 +81,7 @@ onMounted(async () => {
       return
     }
     boot.value = await bootstrap()
-    entrypoints.value = boot.value.entrypoints || []
+    backendEntrypoints.value = boot.value.entrypoints || []
     selectAllEndpoints()
     void loadCloudflareTrace()
   } catch (e) {
@@ -80,13 +91,17 @@ onMounted(async () => {
   }
 })
 
-async function refreshEntrypoints() {
+async function loadLatestEntrypoints(preserveSelection: boolean) {
   if (!token.value) return
-  error.value = ''
-  clearRun()
-  const snapshot = await getEntrypoints(token.value, true)
-  entrypoints.value = snapshot.entrypoints || []
-  selectAllEndpoints()
+  const previous = new Set(selectedIds.value)
+  const snapshot = await getEntrypoints(token.value)
+  backendEntrypoints.value = snapshot.entrypoints || []
+  if (!preserveSelection || previous.size === 0) {
+    selectAllEndpoints()
+    return
+  }
+  const liveIDs = new Set(entrypoints.value.map((endpoint) => endpoint.id))
+  selectedIds.value = Array.from(previous).filter((id) => liveIDs.has(id))
 }
 
 async function run() {
@@ -94,15 +109,17 @@ async function run() {
   running.value = true
   error.value = ''
   clearRun()
-  const endpoints = [...selectedEndpoints.value]
-  for (const endpoint of endpoints) {
-    setState(endpoint.id, {
-      ...blankState(),
-      status: 'idle',
-      current: '待开始',
-    })
-  }
   try {
+    await loadLatestEntrypoints(true)
+    const endpoints = [...selectedEndpoints.value]
+    if (endpoints.length === 0) throw new Error('没有端点可测试')
+    for (const endpoint of endpoints) {
+      setState(endpoint.id, {
+        ...blankState(),
+        status: 'idle',
+        current: '待开始',
+      })
+    }
     for (const endpoint of endpoints) {
       progress.value = endpoint.name
       patchState(endpoint.id, (state) => ({
@@ -203,6 +220,28 @@ function toggleEndpoint(id: string, event: Event) {
     : selectedIds.value.filter((item) => item !== id)
 }
 
+function addManualEndpoint() {
+  if (!isAdmin.value || running.value) return
+  error.value = ''
+  try {
+    const endpoint = buildManualEndpoint(manualURL.value, manualName.value)
+    const exists = entrypoints.value.some((item) => item.base_url === endpoint.base_url || item.lg_base_url === endpoint.lg_base_url)
+    if (exists) throw new Error('该 endpoint 已存在')
+    manualEndpoints.value = [...manualEndpoints.value, endpoint]
+    selectedIds.value = Array.from(new Set([...selectedIds.value, endpoint.id]))
+    manualName.value = ''
+    manualURL.value = ''
+  } catch (e) {
+    error.value = String((e as Error)?.message || e)
+  }
+}
+
+function removeManualEndpoint(id: string) {
+  if (running.value) return
+  manualEndpoints.value = manualEndpoints.value.filter((endpoint) => endpoint.id !== id)
+  selectedIds.value = selectedIds.value.filter((item) => item !== id)
+}
+
 function endpointState(id: string): EndpointRunState {
   return runStates.value[id] || blankState()
 }
@@ -220,6 +259,7 @@ function blankState(): EndpointRunState {
 function emptyMetrics(): LiveMetrics {
   return {
     successRate: null,
+    pingSuccessRate: null,
     avgPing: null,
     avgTTFB: null,
     avgTTFT: null,
@@ -254,11 +294,13 @@ function recordProgress(event: DiagnoseProgressEvent) {
 
 function summarizeSamples(samples: DiagnoseProgressEvent[]): LiveMetrics {
   const ping = samples.filter((sample) => sample.kind === 'ping' && sample.ok)
+  const pingTotal = samples.filter((sample) => sample.kind === 'ping')
   const ttfb = samples.filter((sample) => sample.ttfb_ms != null && sample.ok).map((sample) => sample.ttfb_ms as number)
   const ttft = samples.filter((sample) => sample.ttft_ms != null && sample.ok).map((sample) => sample.ttft_ms as number)
   const successRate = samples.length > 0 ? samples.filter((sample) => sample.ok).length / samples.length : null
   return {
     successRate,
+    pingSuccessRate: pingTotal.length > 0 ? ping.length / pingTotal.length : null,
     avgPing: averageMetric(ping.map((sample) => sample.duration_ms ?? null)),
     avgTTFB: averageMetric(ttfb),
     avgTTFT: averageMetric(ttft),
@@ -270,6 +312,7 @@ function summarizeSamples(samples: DiagnoseProgressEvent[]): LiveMetrics {
 function metricsFromResult(result: EndpointResult): LiveMetrics {
   return {
     successRate: result.browser.success_rate,
+    pingSuccessRate: result.browser.ping_success_rate ?? result.browser.success_rate,
     avgPing: result.browser.avg_ping_ms,
     avgTTFB: result.browser.avg_ttfb_ms,
     avgTTFT: result.browser.avg_ttft_ms,
@@ -338,6 +381,49 @@ function normalizeSizes(sizes: string[]): string[] {
 function traceValue(key: string): string {
   return cfTrace.value?.[key] || '-'
 }
+
+function buildManualEndpoint(rawURL: string, rawName: string): EntryPoint {
+  const raw = rawURL.trim()
+  if (!raw) throw new Error('请输入 endpoint URL')
+  const input = raw.includes('://') ? raw : `https://${raw}`
+  const parsed = new URL(input)
+  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+    throw new Error('endpoint 只支持 http 或 https')
+  }
+  parsed.search = ''
+  parsed.hash = ''
+  const publicPath = boot.value?.app.public_path || '/lg'
+  let basePath = parsed.pathname.replace(/\/+$/, '')
+  if (basePath === publicPath || basePath.endsWith(publicPath)) {
+    basePath = basePath.slice(0, -publicPath.length).replace(/\/+$/, '')
+  }
+  parsed.pathname = basePath || '/'
+  const baseURL = parsed.toString().replace(/\/+$/, '')
+  const lgBaseURL = `${baseURL}${publicPath}`
+  const name = rawName.trim() || parsed.hostname
+  return {
+    id: manualEndpointID(baseURL),
+    source: 'manual',
+    name,
+    description: 'manual endpoint',
+    raw_value: raw,
+    base_url: baseURL,
+    public_path: publicPath,
+    lg_base_url: lgBaseURL,
+    origin: parsed.origin,
+    host: parsed.host,
+    scheme: parsed.protocol.replace(':', ''),
+    enabled: true,
+  }
+}
+
+function manualEndpointID(value: string): string {
+  let hash = 0
+  for (let i = 0; i < value.length; i += 1) {
+    hash = ((hash << 5) - hash + value.charCodeAt(i)) | 0
+  }
+  return `manual_${Math.abs(hash).toString(36)}`
+}
 </script>
 
 <template>
@@ -362,7 +448,6 @@ function traceValue(key: string): string {
         <div class="actions">
           <button :disabled="running" @click="selectAllEndpoints">全选</button>
           <button :disabled="running" @click="clearSelection">清空</button>
-          <button :disabled="running" @click="refreshEntrypoints">刷新端点</button>
           <button class="primary" :disabled="running || selectedEndpoints.length === 0" @click="run">
             {{ running ? '测试中' : '开始测试' }}
           </button>
@@ -375,8 +460,12 @@ function traceValue(key: string): string {
 
       <section class="summary">
         <div>
-          <span class="label">成功率</span>
+          <span class="label">综合成功率</span>
           <strong>{{ pct(aggregate.successRate) }}</strong>
+        </div>
+        <div>
+          <span class="label">Ping 成功率</span>
+          <strong>{{ pct(aggregate.pingSuccessRate) }}</strong>
         </div>
         <div>
           <span class="label">平均 Ping</span>
@@ -434,6 +523,11 @@ function traceValue(key: string): string {
           <h2>选择端点</h2>
           <span>{{ selectedEndpoints.length }}/{{ entrypoints.length }}</span>
         </div>
+        <form v-if="isAdmin" class="manual-endpoint" @submit.prevent="addManualEndpoint">
+          <input v-model="manualName" :disabled="running" placeholder="名称">
+          <input v-model="manualURL" :disabled="running" placeholder="https://example.com">
+          <button :disabled="running" type="submit">添加测试端点</button>
+        </form>
         <div class="endpoint-grid">
           <label
             v-for="row in rows"
@@ -451,6 +545,15 @@ function traceValue(key: string): string {
               <span>{{ row.endpoint.lg_base_url }}</span>
             </span>
             <span :class="['run-status', row.state.status]">{{ statusText(row.state.status) }}</span>
+            <button
+              v-if="row.endpoint.source === 'manual'"
+              class="icon-button"
+              :disabled="running"
+              type="button"
+              @click.prevent.stop="removeManualEndpoint(row.endpoint.id)"
+            >
+              移除
+            </button>
           </label>
         </div>
       </section>
@@ -489,8 +592,12 @@ function traceValue(key: string): string {
           </div>
           <div class="metric-grid">
             <div>
-              <span class="label">成功率</span>
+              <span class="label">综合成功率</span>
               <strong>{{ pct(row.state.metrics.successRate) }}</strong>
+            </div>
+            <div>
+              <span class="label">Ping 成功率</span>
+              <strong>{{ pct(row.state.metrics.pingSuccessRate) }}</strong>
             </div>
             <div>
               <span class="label">Ping 平均</span>

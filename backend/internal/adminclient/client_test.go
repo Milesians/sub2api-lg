@@ -19,3 +19,20 @@ func TestParseUser(t *testing.T) {
 		}
 	}
 }
+
+func TestParseAdminUser(t *testing.T) {
+	cases := []string{
+		`{"id":"123","username":"demo","is_admin":true}`,
+		`{"id":"123","username":"demo","isAdmin":true}`,
+		`{"id":"123","username":"demo","role":"admin"}`,
+	}
+	for _, body := range cases {
+		user, err := parseUser([]byte(body))
+		if err != nil {
+			t.Fatalf("parseUser(%s): %v", body, err)
+		}
+		if !user.IsAdmin {
+			t.Fatalf("parseUser(%s) is_admin = false, want true", body)
+		}
+	}
+}

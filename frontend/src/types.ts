@@ -1,7 +1,7 @@
 export interface BootstrapResponse {
   session_id: string
   session_token: string
-  user: { id?: string; username?: string; email?: string }
+  user: { id?: string; username?: string; email?: string; role?: string; is_admin?: boolean; isAdmin?: boolean; admin?: boolean }
   app: { public_path: string; iframe_origin: string; theme?: string; lang?: string }
   probe: ProbeConfig
   entrypoint_count: number
@@ -43,6 +43,7 @@ export interface EntryPoint {
 
 export interface BrowserSummary {
   success_rate: number
+  ping_success_rate?: number
   http_loss_rate: number
   p50_duration_ms: number | null
   p95_duration_ms: number | null

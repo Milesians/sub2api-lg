@@ -123,7 +123,7 @@ func Default() *Config {
 			EndpointCacheTTLSeconds: 60,
 		},
 		Probe: ProbeConfig{
-			BrowserRepeat:    5,
+			BrowserRepeat:    20,
 			BrowserTimeoutMS: 8000,
 			Paths: ProbePaths{
 				Ping:   "/diag/ping",
@@ -173,7 +173,7 @@ func (c *Config) Normalize() error {
 		c.Sub2API.SettingsPath = "/api/v1/admin/settings"
 	}
 	if c.Probe.BrowserRepeat <= 0 {
-		c.Probe.BrowserRepeat = 5
+		c.Probe.BrowserRepeat = 20
 	}
 	if c.Probe.BrowserTimeoutMS <= 0 {
 		c.Probe.BrowserTimeoutMS = 8000

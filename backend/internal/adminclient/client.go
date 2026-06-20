@@ -40,6 +40,8 @@ type User struct {
 	ID       string `json:"id"`
 	Username string `json:"username"`
 	Email    string `json:"email,omitempty"`
+	Role     string `json:"role,omitempty"`
+	IsAdmin  bool   `json:"is_admin,omitempty"`
 }
 
 func New(cfg *config.Config) *Client {
@@ -163,7 +165,9 @@ func parseUserObject(body []byte) (*User, error) {
 		ID:       stringValue(raw, "id", "user_id", "userId"),
 		Username: stringValue(raw, "username", "name"),
 		Email:    maskEmail(stringValue(raw, "email")),
+		Role:     strings.ToLower(stringValue(raw, "role", "user_role", "userRole")),
 	}
+	user.IsAdmin = boolValue(raw, "is_admin", "isAdmin", "admin", "is_super_admin", "isSuperAdmin") || adminRole(user.Role)
 	return user, nil
 }
 
@@ -179,6 +183,32 @@ func stringValue(m map[string]any, keys ...string) string {
 		}
 	}
 	return ""
+}
+
+func boolValue(m map[string]any, keys ...string) bool {
+	for _, key := range keys {
+		if v, ok := m[key]; ok {
+			switch typed := v.(type) {
+			case bool:
+				return typed
+			case string:
+				value := strings.ToLower(strings.TrimSpace(typed))
+				return value == "true" || value == "1" || value == "yes"
+			case float64:
+				return typed != 0
+			}
+		}
+	}
+	return false
+}
+
+func adminRole(role string) bool {
+	switch strings.ToLower(strings.TrimSpace(role)) {
+	case "admin", "administrator", "root", "super_admin", "superadmin":
+		return true
+	default:
+		return false
+	}
 }
 
 func maskEmail(email string) string {

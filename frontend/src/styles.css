@@ -35,6 +35,17 @@ button.primary {
   color: white;
 }
 
+input {
+  border: 1px solid #c8d0dd;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #1c2430;
+  font: inherit;
+  min-height: 36px;
+  min-width: 0;
+  padding: 0 10px;
+}
+
 .page {
   min-height: 100vh;
   padding: 24px;
@@ -136,6 +147,13 @@ h2 {
   margin-top: 12px;
 }
 
+.manual-endpoint {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(120px, 180px) minmax(220px, 1fr) auto;
+  margin-top: 12px;
+}
+
 .endpoint-option {
   align-items: center;
   border: 1px solid #d8dee8;
@@ -143,9 +161,15 @@ h2 {
   cursor: pointer;
   display: grid;
   gap: 10px;
-  grid-template-columns: auto 1fr auto;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
   min-width: 0;
   padding: 10px 12px;
+}
+
+.icon-button {
+  font-size: 12px;
+  min-height: 28px;
+  padding: 0 8px;
 }
 
 .endpoint-option.selected {
@@ -376,6 +400,10 @@ th {
     grid-template-columns: 1fr;
   }
 
+  .manual-endpoint {
+    grid-template-columns: 1fr;
+  }
+
   .metric-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -388,6 +416,7 @@ th {
   }
 
   button,
+  input,
   .state,
   .progress,
   .report-line,

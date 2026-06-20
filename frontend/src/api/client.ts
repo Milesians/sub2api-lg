@@ -28,8 +28,8 @@ export async function bootstrap(): Promise<BootstrapResponse> {
   return body
 }
 
-export async function getEntrypoints(token: string, refresh = false) {
-  const res = await fetch(`${apiURL('/entrypoints')}?refresh=${refresh ? '1' : '0'}`, {
+export async function getEntrypoints(token: string) {
+  const res = await fetch(apiURL('/entrypoints'), {
     headers: { Authorization: `Bearer ${token}` },
     cache: 'no-store',
   })

@@ -24,7 +24,7 @@ sub2api:
   endpoint_cache_ttl_seconds: 60
 
 probe:
-  browser_repeat: 5
+  browser_repeat: 20
   browser_timeout_ms: 8000
   enable_icmp: false
   paths:
