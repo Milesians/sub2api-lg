@@ -4,35 +4,144 @@ import { percentile, ratio } from './stats'
 import { timedFetch, type TimedFetchResult } from './timed-fetch'
 import { testDiagStream } from './stream-test'
 
-export async function diagnoseEndpoint(endpoint: EntryPoint, probe: ProbeConfig): Promise<EndpointResult> {
+export type TestKind = 'ping' | 'download' | 'upload' | 'stream'
+
+export interface DiagnoseProgressEvent {
+  endpoint_id: string
+  kind: TestKind
+  label: string
+  size?: string
+  ok: boolean
+  duration_ms?: number | null
+  ttfb_ms?: number | null
+  ttft_ms?: number | null
+  mbps?: number | null
+  error_message?: string
+  sample_index: number
+  sample_total: number
+}
+
+interface SizedFetchResult {
+  size: string
+  bytes: number
+  result: TimedFetchResult
+}
+
+export async function diagnoseEndpoint(
+  endpoint: EntryPoint,
+  probe: ProbeConfig,
+  onProgress?: (event: DiagnoseProgressEvent) => void,
+): Promise<EndpointResult> {
   const pingResults: TimedFetchResult[] = []
-  const blobResults: TimedFetchResult[] = []
+  const downloadResults: SizedFetchResult[] = []
+  const uploadResults: SizedFetchResult[] = []
+  const sizes = normalizedSizes(probe.blob_sizes)
+  const totalSteps = probe.browser_repeat + sizes.length * 2 + 1
+  let step = 0
+
   for (let i = 0; i < probe.browser_repeat; i += 1) {
-    pingResults.push(await timedFetch(withNonce(joinURL(endpoint.lg_base_url, probe.paths.ping)), probe.browser_timeout_ms))
+    const result = await timedFetch(withNonce(joinURL(endpoint.lg_base_url, probe.paths.ping)), probe.browser_timeout_ms)
+    pingResults.push(result)
+    step += 1
+    onProgress?.({
+      endpoint_id: endpoint.id,
+      kind: 'ping',
+      label: `Ping ${i + 1}/${probe.browser_repeat}`,
+      ok: result.ok,
+      duration_ms: result.duration_ms,
+      ttfb_ms: result.ttfb_ms ?? null,
+      error_message: result.error_message,
+      sample_index: step,
+      sample_total: totalSteps,
+    })
   }
-  for (const size of probe.blob_sizes) {
+
+  for (const size of sizes) {
     const url = new URL(joinURL(endpoint.lg_base_url, probe.paths.blob))
     url.searchParams.set('size', size)
     url.searchParams.set('nonce', crypto.randomUUID())
-    blobResults.push(await timedFetch(url.toString(), probe.browser_timeout_ms))
+    const result = await timedFetch(url.toString(), probe.browser_timeout_ms)
+    const bytes = result.response_bytes || sizeToBytes(size)
+    downloadResults.push({ size, bytes, result })
+    step += 1
+    onProgress?.({
+      endpoint_id: endpoint.id,
+      kind: 'download',
+      label: `下载 ${size}`,
+      size,
+      ok: result.ok,
+      duration_ms: result.duration_ms,
+      ttfb_ms: result.ttfb_ms ?? null,
+      mbps: mbps(bytes, result.duration_ms, result.ok),
+      error_message: result.error_message,
+      sample_index: step,
+      sample_total: totalSteps,
+    })
   }
+
+  for (const size of sizes) {
+    const bytes = sizeToBytes(size)
+    const url = new URL(joinURL(endpoint.lg_base_url, probe.paths.upload || '/diag/upload'))
+    url.searchParams.set('size', size)
+    url.searchParams.set('nonce', crypto.randomUUID())
+    const result = await timedFetch(url.toString(), probe.browser_timeout_ms, {
+      method: 'POST',
+      body: payload(bytes),
+      contentType: 'application/octet-stream',
+    })
+    uploadResults.push({ size, bytes, result })
+    step += 1
+    onProgress?.({
+      endpoint_id: endpoint.id,
+      kind: 'upload',
+      label: `上传 ${size}`,
+      size,
+      ok: result.ok,
+      duration_ms: result.duration_ms,
+      ttfb_ms: result.ttfb_ms ?? null,
+      mbps: mbps(bytes, result.duration_ms, result.ok),
+      error_message: result.error_message,
+      sample_index: step,
+      sample_total: totalSteps,
+    })
+  }
+
   const streamURL = new URL(joinURL(endpoint.lg_base_url, probe.paths.stream))
   streamURL.searchParams.set('events', String(probe.stream.events))
   streamURL.searchParams.set('interval_ms', String(probe.stream.interval_ms))
   streamURL.searchParams.set('bytes', String(probe.stream.bytes))
   streamURL.searchParams.set('nonce', crypto.randomUUID())
   const stream = await testDiagStream(streamURL.toString(), probe.browser_timeout_ms + probe.stream.events * probe.stream.interval_ms + 1000)
+  step += 1
+  onProgress?.({
+    endpoint_id: endpoint.id,
+    kind: 'stream',
+    label: '流式 TTFT',
+    ok: stream.ok,
+    duration_ms: stream.total_ms,
+    ttft_ms: stream.first_event_ms,
+    error_message: stream.error_message,
+    sample_index: step,
+    sample_total: totalSteps,
+  })
 
-  const all = [...pingResults, ...blobResults]
-  const successCount = all.filter((item) => item.ok).length + (stream.ok ? 1 : 0)
-  const totalCount = all.length + 1
+  const fetchResults = [
+    ...pingResults,
+    ...downloadResults.map((item) => item.result),
+    ...uploadResults.map((item) => item.result),
+  ]
+  const totalCount = fetchResults.length + 1
+  const successCount = fetchResults.filter((item) => item.ok).length + (stream.ok ? 1 : 0)
   const durations = pingResults.filter((item) => item.ok).map((item) => item.duration_ms)
   const ttfbValues = pingResults.filter((item) => item.ok && item.ttfb_ms != null).map((item) => item.ttfb_ms as number)
   const p50Duration = percentile(durations, 50)
   const p95Duration = percentile(durations, 95)
   const p50TTFB = percentile(ttfbValues, 50)
   const p95TTFB = percentile(ttfbValues, 95)
-  const downloadMbps = calculateDownloadMbps(blobResults)
+  const downloadMbps = averageMbps(downloadResults)
+  const uploadMbps = averageMbps(uploadResults)
+  const small = sizes[0]
+  const large = sizes[sizes.length - 1]
   const summary: BrowserSummary = {
     success_rate: ratio(successCount, totalCount),
     http_loss_rate: ratio(totalCount - successCount, totalCount),
@@ -40,14 +149,23 @@ export async function diagnoseEndpoint(endpoint: EntryPoint, probe: ProbeConfig)
     p95_duration_ms: p95Duration,
     p50_ttfb_ms: p50TTFB,
     p95_ttfb_ms: p95TTFB,
+    avg_ping_ms: average(durations),
+    avg_ttfb_ms: average(ttfbValues),
+    avg_ttft_ms: stream.first_event_ms,
     jitter_ms: p50Duration != null && p95Duration != null ? p95Duration - p50Duration : null,
-    timeout_rate: ratio(all.filter((item) => item.error_kind === 'timeout').length + (stream.error_kind === 'timeout' ? 1 : 0), totalCount),
+    timeout_rate: ratio(fetchResults.filter((item) => item.error_kind === 'timeout').length + (stream.error_kind === 'timeout' ? 1 : 0), totalCount),
     download_mbps: downloadMbps,
+    upload_mbps: uploadMbps,
+    download_small_mbps: speedForSize(downloadResults, small),
+    download_large_mbps: speedForSize(downloadResults, large),
+    upload_small_mbps: speedForSize(uploadResults, small),
+    upload_large_mbps: speedForSize(uploadResults, large),
     first_event_ms: stream.first_event_ms,
     max_chunk_gap_ms: stream.max_event_gap_ms,
     stream_buffered: stream.stream_buffered,
-    cors_blocked: all.some((item) => item.error_message?.toLowerCase().includes('cors') || item.error_message?.toLowerCase().includes('failed to fetch')),
-    timing_detail_available: all.some((item) => item.timing_detail_available),
+    cors_blocked: fetchResults.some((item) => item.error_message?.toLowerCase().includes('cors') || item.error_message?.toLowerCase().includes('failed to fetch')) ||
+      Boolean(stream.error_message?.toLowerCase().includes('cors') || stream.error_message?.toLowerCase().includes('failed to fetch')),
+    timing_detail_available: fetchResults.some((item) => item.timing_detail_available),
   }
   const level = scoreLevel(summary)
   return {
@@ -84,11 +202,54 @@ export function buildReport(results: EndpointResult[], iframeContext: Record<str
   }
 }
 
-function calculateDownloadMbps(items: TimedFetchResult[]): number | null {
-  const ok = items.filter((item) => item.ok && item.response_bytes && item.duration_ms > 0)
+function averageMbps(items: SizedFetchResult[]): number | null {
+  const ok = items.filter((item) => item.result.ok && item.bytes > 0 && item.result.duration_ms > 0)
   if (ok.length === 0) return null
-  const mbps = ok.map((item) => ((item.response_bytes || 0) * 8) / (item.duration_ms / 1000) / 1_000_000)
-  return Number((mbps.reduce((sum, item) => sum + item, 0) / mbps.length).toFixed(2))
+  return round(ok.reduce((sum, item) => sum + (mbps(item.bytes, item.result.duration_ms, true) || 0), 0) / ok.length)
+}
+
+function speedForSize(items: SizedFetchResult[], size: string): number | null {
+  const item = items.find((candidate) => candidate.size === size)
+  if (!item) return null
+  return mbps(item.bytes, item.result.duration_ms, item.result.ok)
+}
+
+function mbps(bytes: number, durationMs: number, ok: boolean): number | null {
+  if (!ok || bytes <= 0 || durationMs <= 0) return null
+  return round((bytes * 8) / (durationMs / 1000) / 1_000_000)
+}
+
+function average(values: number[]): number | null {
+  if (values.length === 0) return null
+  return Math.round(values.reduce((sum, item) => sum + item, 0) / values.length)
+}
+
+function round(value: number): number {
+  return Number(value.toFixed(2))
+}
+
+function normalizedSizes(sizes: string[]): string[] {
+  const out = sizes.filter(Boolean)
+  if (out.length === 0) return ['64k', '1m']
+  if (out.length === 1) return out
+  return [out[0], out[out.length - 1]]
+}
+
+function sizeToBytes(size: string): number {
+  const match = size.trim().toLowerCase().match(/^(\d+)(k|m)?$/)
+  if (!match) return 0
+  const value = Number(match[1])
+  if (match[2] === 'm') return value * 1024 * 1024
+  if (match[2] === 'k') return value * 1024
+  return value
+}
+
+function payload(bytes: number): Blob {
+  const body = new Uint8Array(bytes)
+  for (let i = 0; i < body.length; i += 1) {
+    body[i] = i % 251
+  }
+  return new Blob([body], { type: 'application/octet-stream' })
 }
 
 function scoreLevel(summary: BrowserSummary): 'good' | 'warning' | 'bad' {

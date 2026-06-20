@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -68,6 +69,39 @@ func (h *DiagHandlers) Blob(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write(chunk)
 		written += len(chunk)
 	}
+}
+
+func (h *DiagHandlers) Upload(w http.ResponseWriter, r *http.Request) {
+	sizeName := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("size")))
+	if sizeName == "" {
+		sizeName = "64k"
+	}
+	size, ok := allowedBlobSize(sizeName, h.cfg.Probe.Allow5MBlob)
+	if !ok {
+		http.Error(w, "unsupported upload size", http.StatusBadRequest)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, int64(size)+1)
+	received, err := io.Copy(io.Discard, r.Body)
+	if err != nil {
+		http.Error(w, "read upload failed", http.StatusBadRequest)
+		return
+	}
+	requestID := requestID()
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Timing-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Expose-Headers", "Server-Timing, X-Request-Id, Content-Length")
+	w.Header().Set("X-Request-Id", requestID)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"ok":          true,
+		"request_id":  requestID,
+		"size":        sizeName,
+		"bytes":       received,
+		"expected":    size,
+		"size_match":  received == int64(size),
+		"server_time": time.Now().Format(time.RFC3339),
+	})
 }
 
 func (h *DiagHandlers) Stream(w http.ResponseWriter, r *http.Request) {

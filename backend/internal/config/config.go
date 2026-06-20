@@ -66,6 +66,7 @@ type ProbeConfig struct {
 type ProbePaths struct {
 	Ping   string `yaml:"ping" json:"ping"`
 	Blob   string `yaml:"blob" json:"blob"`
+	Upload string `yaml:"upload" json:"upload"`
 	Stream string `yaml:"stream" json:"stream"`
 }
 
@@ -133,6 +134,7 @@ func Default() *Config {
 			Paths: ProbePaths{
 				Ping:   "/diag/ping",
 				Blob:   "/diag/blob",
+				Upload: "/diag/upload",
 				Stream: "/diag/stream",
 			},
 			BlobSizes:   []string{"64k", "1m"},
@@ -195,6 +197,10 @@ func (c *Config) Normalize() error {
 	c.Probe.Paths.Blob, err = ValidatePublicPath(defaultString(c.Probe.Paths.Blob, "/diag/blob"))
 	if err != nil {
 		return fmt.Errorf("probe.paths.blob: %w", err)
+	}
+	c.Probe.Paths.Upload, err = ValidatePublicPath(defaultString(c.Probe.Paths.Upload, "/diag/upload"))
+	if err != nil {
+		return fmt.Errorf("probe.paths.upload: %w", err)
 	}
 	c.Probe.Paths.Stream, err = ValidatePublicPath(defaultString(c.Probe.Paths.Stream, "/diag/stream"))
 	if err != nil {
@@ -278,6 +284,7 @@ func applyEnv(c *Config) {
 	setBool(&c.Probe.EnableICMP, "ENABLE_ICMP")
 	setString(&c.Probe.Paths.Ping, "PROBE_PATH_PING")
 	setString(&c.Probe.Paths.Blob, "PROBE_PATH_BLOB")
+	setString(&c.Probe.Paths.Upload, "PROBE_PATH_UPLOAD")
 	setString(&c.Probe.Paths.Stream, "PROBE_PATH_STREAM")
 	setCSV(&c.Probe.BlobSizes, "PROBE_BLOB_SIZES")
 	setString(&c.Probe.MaxBlobSize, "PROBE_MAX_BLOB_SIZE")

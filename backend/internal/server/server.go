@@ -77,6 +77,8 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 		s.diag.Ping(w, r)
 	case r.Method == http.MethodGet && path == s.cfg.Probe.Paths.Blob:
 		s.diag.Blob(w, r)
+	case r.Method == http.MethodPost && path == s.cfg.Probe.Paths.Upload:
+		s.diag.Upload(w, r)
 	case r.Method == http.MethodGet && path == s.cfg.Probe.Paths.Stream:
 		s.diag.Stream(w, r)
 	default:
@@ -108,7 +110,7 @@ func (s *Server) withCORS(next http.Handler) http.Handler {
 		path := stripRouterPrefix(r.URL.Path, s.cfg.App.RouterPrefix)
 		if strings.HasPrefix(path, "/diag/") {
 			w.Header().Set("Access-Control-Allow-Origin", "*")
-			w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Requested-With")
 			w.Header().Set("Access-Control-Expose-Headers", "Server-Timing, X-Request-Id, Content-Length")
 			w.Header().Set("Timing-Allow-Origin", "*")

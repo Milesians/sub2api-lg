@@ -33,6 +33,7 @@ probe:
   paths:
     ping: "/diag/ping"
     blob: "/diag/blob"
+    upload: "/diag/upload"
     stream: "/diag/stream"
   blob_sizes:
     - "64k"

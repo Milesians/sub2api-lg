@@ -10,7 +10,13 @@ export interface TimedFetchResult {
   ttfb_ms?: number | null
 }
 
-export async function timedFetch(url: string, timeoutMs: number): Promise<TimedFetchResult> {
+export interface TimedFetchOptions {
+  method?: 'GET' | 'POST'
+  body?: BodyInit
+  contentType?: string
+}
+
+export async function timedFetch(url: string, timeoutMs: number, options: TimedFetchOptions = {}): Promise<TimedFetchResult> {
   const controller = new AbortController()
   const timer = window.setTimeout(() => controller.abort(), timeoutMs)
   const started = performance.now()
@@ -18,9 +24,11 @@ export async function timedFetch(url: string, timeoutMs: number): Promise<TimedF
 
   try {
     const res = await fetch(url, {
-      method: 'GET',
+      method: options.method || 'GET',
       cache: 'no-store',
       credentials: 'omit',
+      headers: options.contentType ? { 'Content-Type': options.contentType } : undefined,
+      body: options.body,
       signal: controller.signal,
     })
     const firstHeadersAt = performance.now()

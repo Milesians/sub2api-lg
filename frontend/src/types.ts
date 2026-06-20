@@ -15,6 +15,7 @@ export interface ProbeConfig {
   paths: {
     ping: string
     blob: string
+    upload: string
     stream: string
   }
   blob_sizes: string[]
@@ -47,9 +48,17 @@ export interface BrowserSummary {
   p95_duration_ms: number | null
   p50_ttfb_ms: number | null
   p95_ttfb_ms: number | null
+  avg_ping_ms: number | null
+  avg_ttfb_ms: number | null
+  avg_ttft_ms: number | null
   jitter_ms: number | null
   timeout_rate: number
   download_mbps: number | null
+  upload_mbps: number | null
+  download_small_mbps: number | null
+  download_large_mbps: number | null
+  upload_small_mbps: number | null
+  upload_large_mbps: number | null
   first_event_ms: number | null
   max_chunk_gap_ms: number | null
   stream_buffered: boolean
