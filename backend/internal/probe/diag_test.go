@@ -25,6 +25,38 @@ func TestPingSetsOriginPeerIP(t *testing.T) {
 	}
 }
 
+func TestPingTrustsProxyPeerIPFromLocalProxy(t *testing.T) {
+	cfg := config.Default()
+	cfg.App.TrustForwardedHeaders = true
+	handler := NewDiagHandlers(cfg)
+	req := httptest.NewRequest(http.MethodGet, "/diag/ping", nil)
+	req.RemoteAddr = "172.21.0.1:443"
+	req.Header.Set("X-Real-IP", "198.51.100.23")
+	res := httptest.NewRecorder()
+
+	handler.Ping(res, req)
+
+	if got := res.Header().Get("X-Origin-Peer-IP"); got != "198.51.100.23" {
+		t.Fatalf("X-Origin-Peer-IP = %q, want 198.51.100.23", got)
+	}
+}
+
+func TestPingIgnoresSpoofedProxyPeerIPFromPublicPeer(t *testing.T) {
+	cfg := config.Default()
+	cfg.App.TrustForwardedHeaders = true
+	handler := NewDiagHandlers(cfg)
+	req := httptest.NewRequest(http.MethodGet, "/diag/ping", nil)
+	req.RemoteAddr = "203.0.113.10:443"
+	req.Header.Set("X-Real-IP", "198.51.100.23")
+	res := httptest.NewRecorder()
+
+	handler.Ping(res, req)
+
+	if got := res.Header().Get("X-Origin-Peer-IP"); got != "203.0.113.10" {
+		t.Fatalf("X-Origin-Peer-IP = %q, want 203.0.113.10", got)
+	}
+}
+
 func TestDirectPeerIP(t *testing.T) {
 	cases := map[string]string{
 		"203.0.113.10:443":    "203.0.113.10",

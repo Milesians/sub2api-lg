@@ -34,7 +34,7 @@ func (h *DiagHandlers) Ping(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Timing-Allow-Origin", "*")
 	w.Header().Set("Access-Control-Expose-Headers", diagExposeHeaders)
 	w.Header().Set("X-Request-Id", requestID)
-	if peerIP := directPeerIP(r.RemoteAddr); peerIP != "" {
+	if peerIP := h.originPeerIP(r); peerIP != "" {
 		w.Header().Set("X-Origin-Peer-IP", peerIP)
 	}
 	w.Header().Set("Server-Timing", "app;dur=1")
@@ -235,6 +235,35 @@ func directPeerIP(remoteAddr string) string {
 		return strings.Trim(host, "[]")
 	}
 	return strings.Trim(strings.TrimSpace(remoteAddr), "[]")
+}
+
+func (h *DiagHandlers) originPeerIP(r *http.Request) string {
+	direct := directPeerIP(r.RemoteAddr)
+	if !h.cfg.App.TrustForwardedHeaders || !isLocalProxyPeer(direct) {
+		return direct
+	}
+	for _, header := range []string{"X-Origin-Peer-IP", "X-Real-IP"} {
+		if ip := headerIP(r.Header.Get(header)); ip != "" {
+			return ip
+		}
+	}
+	return direct
+}
+
+func headerIP(value string) string {
+	if value = strings.TrimSpace(value); value == "" {
+		return ""
+	}
+	item := strings.TrimSpace(strings.Split(value, ",")[0])
+	if ip := net.ParseIP(strings.Trim(item, "[]")); ip != nil {
+		return ip.String()
+	}
+	return ""
+}
+
+func isLocalProxyPeer(value string) bool {
+	ip := net.ParseIP(value)
+	return ip != nil && (ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast())
 }
 
 func ContextWithTimeout(parent context.Context, ms int) (context.Context, context.CancelFunc) {
