@@ -31,9 +31,6 @@ onMounted(async () => {
     }
     boot.value = await bootstrap()
     entrypoints.value = boot.value.entrypoints || []
-    if (entrypoints.value.length > 0) {
-      await run()
-    }
   } catch (e) {
     error.value = String((e as Error)?.message || e)
   } finally {
@@ -43,6 +40,10 @@ onMounted(async () => {
 
 async function refreshEntrypoints() {
   if (!token.value) return
+  error.value = ''
+  results.value = []
+  reportId.value = ''
+  shareURL.value = ''
   const snapshot = await getEntrypoints(token.value, true)
   entrypoints.value = snapshot.entrypoints || []
 }
@@ -131,6 +132,7 @@ function notifyParent(summary: any) {
       </header>
 
       <div v-if="running" class="progress">正在测试：{{ progress }}</div>
+      <div v-else-if="results.length === 0" class="state">待开始</div>
       <p v-if="error" class="error">{{ error }}</p>
 
       <section v-if="best" class="summary">
