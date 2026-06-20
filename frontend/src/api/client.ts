@@ -1,4 +1,4 @@
-import type { BootstrapResponse } from '../types'
+import type { BootstrapResponse, RouteInfo } from '../types'
 import { apiURL } from '../utils/url'
 
 export function iframeContext(): Record<string, string> {
@@ -37,6 +37,33 @@ export async function getEntrypoints(token: string, refresh = false) {
   return res.json()
 }
 
+export async function getRouteInfo(token: string, endpointId: string): Promise<RouteInfo> {
+  const url = new URL(apiURL('/route'), window.location.origin)
+  url.searchParams.set('endpoint_id', endpointId)
+  const res = await fetch(url.toString(), {
+    headers: { Authorization: `Bearer ${token}` },
+    cache: 'no-store',
+  })
+  if (!res.ok) throw new Error(`route diagnostics failed: ${res.status}`)
+  return res.json()
+}
+
+export async function getCloudflareTrace(): Promise<Record<string, string> | null> {
+  const ctx = iframeContext()
+  const origins = uniqueOrigins([ctx.src_url, ctx.src_host, window.location.origin])
+  for (const origin of origins) {
+    try {
+      const res = await fetch(`${origin}/cdn-cgi/trace`, { cache: 'no-store' })
+      if (!res.ok) continue
+      const parsed = parseTrace(await res.text())
+      if (parsed.colo || parsed.fl || parsed.ip) return parsed
+    } catch {
+      // Cross-origin or non-Cloudflare hosts are expected; just hide this panel.
+    }
+  }
+  return null
+}
+
 export async function submitReport(token: string, payload: unknown): Promise<{ report_id: string; share_url: string }> {
   const res = await fetch(apiURL('/reports'), {
     method: 'POST',
@@ -61,4 +88,38 @@ function cleanTokenFromURL() {
   if (!url.searchParams.has('token')) return
   url.searchParams.delete('token')
   window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`)
+}
+
+function uniqueOrigins(values: string[]): string[] {
+  const out: string[] = []
+  for (const value of values) {
+    const origin = toOrigin(value)
+    if (origin && !out.includes(origin)) out.push(origin)
+  }
+  return out
+}
+
+function toOrigin(value: string): string {
+  const trimmed = value.trim()
+  if (!trimmed) return ''
+  try {
+    if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+      return new URL(trimmed).origin
+    }
+    return new URL(`https://${trimmed}`).origin
+  } catch {
+    return ''
+  }
+}
+
+function parseTrace(text: string): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const line of text.split('\n')) {
+    const index = line.indexOf('=')
+    if (index <= 0) continue
+    const key = line.slice(0, index).trim()
+    const value = line.slice(index + 1).trim()
+    if (key) out[key] = value
+  }
+  return out
 }

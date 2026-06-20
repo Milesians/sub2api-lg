@@ -55,6 +55,8 @@ export interface BrowserSummary {
   timeout_rate: number
   download_mbps: number | null
   upload_mbps: number | null
+  download_mbps_by_size?: Record<string, number | null>
+  upload_mbps_by_size?: Record<string, number | null>
   download_small_mbps: number | null
   download_large_mbps: number | null
   upload_small_mbps: number | null
@@ -72,6 +74,50 @@ export interface EndpointResult {
   base_url: string
   lg_base_url: string
   browser: BrowserSummary
+  route?: RouteInfo | null
   level: 'good' | 'warning' | 'bad'
   recommendation: string
+}
+
+export interface ASNInfo {
+  asn?: string
+  prefix?: string
+  cc?: string
+  registry?: string
+  allocated?: string
+  name?: string
+}
+
+export interface RouteIPInfo {
+  ip: string
+  asn?: ASNInfo | null
+}
+
+export interface RouteHop {
+  index: number
+  ip?: string
+  rtt_ms?: number[]
+  asn?: ASNInfo | null
+  raw?: string
+}
+
+export interface ServerRouteProbe {
+  enabled: boolean
+  dns_ms?: number
+  tcp_ms?: number
+  tls_ms?: number
+  ttfb_ms?: number
+  duration_ms?: number
+  status?: number
+  error_kind?: string
+}
+
+export interface RouteInfo {
+  host: string
+  checked_at: string
+  ips?: RouteIPInfo[]
+  hops?: RouteHop[]
+  server?: ServerRouteProbe
+  error?: string
+  traceroute_error?: string
 }

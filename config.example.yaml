@@ -38,8 +38,10 @@ probe:
   blob_sizes:
     - "64k"
     - "1m"
-  max_blob_size: "1m"
-  allow_5m_blob: false
+    - "5m"
+    - "20m"
+  max_blob_size: "20m"
+  allow_5m_blob: true
   stream:
     events: 20
     interval_ms: 200

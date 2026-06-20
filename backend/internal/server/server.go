@@ -73,10 +73,14 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, s.redirectPath(r, "/embed"), http.StatusFound)
 	case r.Method == http.MethodGet && strings.HasPrefix(path, "/assets/"):
 		s.serveAsset(w, r)
+	case r.Method == http.MethodGet && s.publicPathHasPrefix(path, "/assets/"):
+		s.servePublicPathAsset(w, r)
 	case r.Method == http.MethodPost && path == "/api/bootstrap":
 		s.bootstrap(w, r)
 	case r.Method == http.MethodGet && path == "/api/entrypoints":
 		s.requireSession(s.entrypoints)(w, r)
+	case r.Method == http.MethodGet && path == "/api/route":
+		s.requireSession(s.routeDiagnostics)(w, r)
 	case r.Method == http.MethodPost && path == "/api/reports":
 		s.requireSession(s.createReport)(w, r)
 	case r.Method == http.MethodGet && strings.HasPrefix(path, "/api/reports/"):
@@ -256,6 +260,45 @@ func (s *Server) entrypoints(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, snapshot)
 }
 
+func (s *Server) routeDiagnostics(w http.ResponseWriter, r *http.Request) {
+	endpointID := strings.TrimSpace(r.URL.Query().Get("endpoint_id"))
+	if endpointID == "" {
+		http.Error(w, "endpoint_id is required", http.StatusBadRequest)
+		return
+	}
+	snapshot, err := s.cache.Get(r.Context(), false)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	endpoint := findEndpointByID(snapshot, endpointID)
+	if endpoint == nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	timeoutMS := s.cfg.Probe.ServerTimeoutMS
+	if timeoutMS < 8000 {
+		timeoutMS = 8000
+	}
+	if timeoutMS > 20000 {
+		timeoutMS = 20000
+	}
+	ctx, cancel := probe.ContextWithTimeout(r.Context(), timeoutMS)
+	defer cancel()
+	info := probe.RouteDiagnostics(ctx, endpoint.Host)
+
+	if s.serverProbe != nil {
+		probeCtx, probeCancel := probe.ContextWithTimeout(r.Context(), s.cfg.Probe.ServerTimeoutMS)
+		result := s.serverProbe.ProbePing(probeCtx, endpoint.LGBaseURL)
+		probeCancel()
+		if result.Enabled {
+			info.Server = &result
+		}
+	}
+	writeJSON(w, info)
+}
+
 func (s *Server) createReport(w http.ResponseWriter, r *http.Request) {
 	session := sessionFromContext(r.Context())
 	var payload map[string]any
@@ -331,11 +374,12 @@ func (s *Server) requireSession(next http.HandlerFunc) http.HandlerFunc {
 }
 
 func (s *Server) serveIndex(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Referrer-Policy", "no-referrer")
-	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("Content-Security-Policy", "frame-ancestors "+s.frameAncestors())
-	indexPath := filepath.Join(s.staticDir, "index.html")
-	http.ServeFile(w, r, indexPath)
+	html, err := s.frontendIndexHTML()
+	if err != nil {
+		http.Error(w, "frontend is not built", http.StatusInternalServerError)
+		return
+	}
+	s.writeFrontendHTML(w, html)
 }
 
 func (s *Server) serveReport(w http.ResponseWriter, r *http.Request) {
@@ -357,12 +401,38 @@ func (s *Server) serveReport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	payload := strings.ReplaceAll(string(report.PayloadJSON), "</script", "<\\/script")
-	injected := strings.Replace(string(html), "</head>", "<script>window.__SUB2API_LG_REPORT__="+payload+"</script></head>", 1)
+	injected := strings.Replace(s.rewriteFrontendAssetPaths(string(html)), "</head>", "<script>window.__SUB2API_LG_REPORT__="+payload+"</script></head>", 1)
+	s.writeFrontendHTML(w, []byte(injected))
+}
+
+func (s *Server) frontendIndexHTML() ([]byte, error) {
+	indexPath := filepath.Join(s.staticDir, "index.html")
+	html, err := os.ReadFile(indexPath)
+	if err != nil {
+		return nil, err
+	}
+	return []byte(s.rewriteFrontendAssetPaths(string(html))), nil
+}
+
+func (s *Server) writeFrontendHTML(w http.ResponseWriter, html []byte) {
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Security-Policy", "frame-ancestors "+s.frameAncestors())
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = w.Write([]byte(injected))
+	_, _ = w.Write(html)
+}
+
+func (s *Server) rewriteFrontendAssetPaths(html string) string {
+	prefix := strings.TrimRight(s.cfg.App.PublicPath, "/")
+	if prefix == "" {
+		prefix = "/"
+	}
+	assetPath := strings.TrimRight(prefix, "/") + "/assets/"
+	if prefix == "/" {
+		assetPath = "/assets/"
+	}
+	html = strings.ReplaceAll(html, `src="./assets/`, `src="`+assetPath)
+	return strings.ReplaceAll(html, `href="./assets/`, `href="`+assetPath)
 }
 
 func (s *Server) findReport(ctx context.Context, id string) (*store.Report, error) {
@@ -406,6 +476,21 @@ func (s *Server) serveAsset(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", mime.TypeByExtension(ext))
 	}
 	http.ServeFile(w, r, full)
+}
+
+func (s *Server) servePublicPathAsset(w http.ResponseWriter, r *http.Request) {
+	prefix := strings.TrimRight(s.cfg.App.PublicPath, "/")
+	clone := r.Clone(r.Context())
+	clone.URL.Path = strings.TrimPrefix(r.URL.Path, prefix)
+	s.serveAsset(w, clone)
+}
+
+func (s *Server) publicPathHasPrefix(pathValue string, suffix string) bool {
+	prefix := strings.TrimRight(s.cfg.App.PublicPath, "/")
+	if prefix == "" || prefix == "/" {
+		return false
+	}
+	return strings.HasPrefix(pathValue, prefix+suffix)
 }
 
 func (s *Server) frameAncestors() string {
@@ -581,6 +666,18 @@ func snapshotSource(snapshot *entrypoints.Snapshot) string {
 		return ""
 	}
 	return snapshot.Source
+}
+
+func findEndpointByID(snapshot *entrypoints.Snapshot, id string) *entrypoints.EntryPoint {
+	if snapshot == nil {
+		return nil
+	}
+	for i := range snapshot.Entrypoints {
+		if snapshot.Entrypoints[i].ID == id {
+			return &snapshot.Entrypoints[i]
+		}
+	}
+	return nil
 }
 
 func sanitizeReportPayload(payload map[string]any) {

@@ -142,6 +142,8 @@ export async function diagnoseEndpoint(
   const uploadMbps = averageMbps(uploadResults)
   const small = sizes[0]
   const large = sizes[sizes.length - 1]
+  const downloadBySize = speedBySize(downloadResults)
+  const uploadBySize = speedBySize(uploadResults)
   const summary: BrowserSummary = {
     success_rate: ratio(successCount, totalCount),
     http_loss_rate: ratio(totalCount - successCount, totalCount),
@@ -156,6 +158,8 @@ export async function diagnoseEndpoint(
     timeout_rate: ratio(fetchResults.filter((item) => item.error_kind === 'timeout').length + (stream.error_kind === 'timeout' ? 1 : 0), totalCount),
     download_mbps: downloadMbps,
     upload_mbps: uploadMbps,
+    download_mbps_by_size: downloadBySize,
+    upload_mbps_by_size: uploadBySize,
     download_small_mbps: speedForSize(downloadResults, small),
     download_large_mbps: speedForSize(downloadResults, large),
     upload_small_mbps: speedForSize(uploadResults, small),
@@ -214,6 +218,14 @@ function speedForSize(items: SizedFetchResult[], size: string): number | null {
   return mbps(item.bytes, item.result.duration_ms, item.result.ok)
 }
 
+function speedBySize(items: SizedFetchResult[]): Record<string, number | null> {
+  const out: Record<string, number | null> = {}
+  for (const item of items) {
+    out[item.size] = mbps(item.bytes, item.result.duration_ms, item.result.ok)
+  }
+  return out
+}
+
 function mbps(bytes: number, durationMs: number, ok: boolean): number | null {
   if (!ok || bytes <= 0 || durationMs <= 0) return null
   return round((bytes * 8) / (durationMs / 1000) / 1_000_000)
@@ -229,10 +241,8 @@ function round(value: number): number {
 }
 
 function normalizedSizes(sizes: string[]): string[] {
-  const out = sizes.filter(Boolean)
-  if (out.length === 0) return ['64k', '1m']
-  if (out.length === 1) return out
-  return [out[0], out[out.length - 1]]
+  const out = Array.from(new Set(sizes.map((item) => item.trim().toLowerCase()).filter(Boolean)))
+  return out.length > 0 ? out : ['64k', '1m', '5m', '20m']
 }
 
 function sizeToBytes(size: string): number {

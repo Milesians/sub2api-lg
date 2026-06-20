@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -67,6 +68,54 @@ func TestRootRedirectPreservesRouterPrefix(t *testing.T) {
 	}
 	if location := res.Header().Get("Location"); location != "/lg/embed?user_id=123&token=valid-token" {
 		t.Fatalf("redirect location = %q, want /lg/embed?user_id=123&token=valid-token", location)
+	}
+}
+
+func TestFrontendAssetPathsUsePublicPath(t *testing.T) {
+	cfg := config.Default()
+	cfg.App.PublicPath = "/lg"
+	if err := cfg.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	server := &Server{cfg: cfg}
+	html := `<script type="module" src="./assets/index.js"></script><link href="./assets/index.css">`
+	got := server.rewriteFrontendAssetPaths(html)
+
+	if strings.Contains(got, "./assets/") {
+		t.Fatalf("asset path should not stay relative: %s", got)
+	}
+	for _, want := range []string{`src="/lg/assets/index.js"`, `href="/lg/assets/index.css"`} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("rewritten html missing %q: %s", want, got)
+		}
+	}
+}
+
+func TestPublicPathAssetsAreServedWithoutRouterPrefix(t *testing.T) {
+	cfg := config.Default()
+	cfg.App.PublicPath = "/lg"
+	cfg.App.RouterPrefix = "/"
+	if err := cfg.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	staticDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(staticDir, "assets"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(staticDir, "assets", "index.js"), []byte("console.log('ok')"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	handler := (&Server{cfg: cfg, staticDir: staticDir}).Handler()
+	req := httptest.NewRequest(http.MethodGet, "/lg/assets/index.js", nil)
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("asset status = %d, body = %s", res.Code, res.Body.String())
+	}
+	if body := res.Body.String(); body != "console.log('ok')" {
+		t.Fatalf("asset body = %q", body)
 	}
 }
 

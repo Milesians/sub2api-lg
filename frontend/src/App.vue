@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { bootstrap, getEntrypoints, getReport, iframeContext, submitReport } from './api/client'
+import { bootstrap, getCloudflareTrace, getEntrypoints, getReport, getRouteInfo, iframeContext, submitReport } from './api/client'
 import { buildReport, diagnoseEndpoint, type DiagnoseProgressEvent } from './diagnose/runner'
-import type { BootstrapResponse, EndpointResult, EntryPoint } from './types'
+import type { BootstrapResponse, EndpointResult, EntryPoint, RouteHop, RouteInfo } from './types'
 
 type RunStatus = 'idle' | 'running' | 'done' | 'failed'
 
@@ -11,10 +11,8 @@ interface LiveMetrics {
   avgPing: number | null
   avgTTFB: number | null
   avgTTFT: number | null
-  downloadSmall: number | null
-  downloadLarge: number | null
-  uploadSmall: number | null
-  uploadLarge: number | null
+  downloadBySize: Record<string, number | null>
+  uploadBySize: Record<string, number | null>
 }
 
 interface EndpointRunState {
@@ -23,6 +21,7 @@ interface EndpointRunState {
   logs: string[]
   samples: DiagnoseProgressEvent[]
   metrics: LiveMetrics
+  route?: RouteInfo | null
   result?: EndpointResult
 }
 
@@ -38,6 +37,7 @@ const reportId = ref('')
 const shareURL = ref('')
 const reportJSON = ref<unknown>(null)
 const progress = ref('')
+const cfTrace = ref<Record<string, string> | null>(null)
 
 const isReportPage = computed(() => window.location.pathname.includes('/report/'))
 const token = computed(() => boot.value?.session_token || sessionStorage.getItem('sub2api_lg_session_token') || '')
@@ -50,13 +50,8 @@ const rows = computed(() => entrypoints.value.map((endpoint) => ({
 })))
 const selectedEndpoints = computed(() => entrypoints.value.filter((endpoint) => selectedIds.value.includes(endpoint.id)))
 const selectedRows = computed(() => rows.value.filter((row) => row.selected))
-const sizeLabels = computed(() => {
-  const sizes = boot.value?.probe.blob_sizes?.filter(Boolean) || ['64k', '1m']
-  return {
-    small: sizes[0] || '64k',
-    large: sizes[sizes.length - 1] || sizes[0] || '1m',
-  }
-})
+const sizeLabels = computed(() => normalizeSizes(boot.value?.probe.blob_sizes || ['64k', '1m', '5m', '20m']))
+const largestSize = computed(() => sizeLabels.value[sizeLabels.value.length - 1] || '20m')
 const aggregate = computed(() => {
   const states = selectedIds.value.map((id) => endpointState(id)).filter((state) => state.samples.length > 0 || state.result)
   return {
@@ -64,8 +59,8 @@ const aggregate = computed(() => {
     avgPing: averageMetric(states.map((state) => state.metrics.avgPing)),
     avgTTFB: averageMetric(states.map((state) => state.metrics.avgTTFB)),
     avgTTFT: averageMetric(states.map((state) => state.metrics.avgTTFT)),
-    download: averageMetric(states.map((state) => state.metrics.downloadLarge ?? state.metrics.downloadSmall)),
-    upload: averageMetric(states.map((state) => state.metrics.uploadLarge ?? state.metrics.uploadSmall)),
+    download: averageMetric(states.map((state) => metricBySize(state.metrics.downloadBySize, largestSize.value))),
+    upload: averageMetric(states.map((state) => metricBySize(state.metrics.uploadBySize, largestSize.value))),
   }
 })
 
@@ -78,6 +73,7 @@ onMounted(async () => {
     boot.value = await bootstrap()
     entrypoints.value = boot.value.entrypoints || []
     selectAllEndpoints()
+    void loadCloudflareTrace()
   } catch (e) {
     error.value = String((e as Error)?.message || e)
   } finally {
@@ -117,7 +113,9 @@ async function run() {
         logs: ['准备测试'],
       }))
       try {
+        const routePromise = loadRoute(endpoint.id)
         const result = await diagnoseEndpoint(endpoint, boot.value.probe, (event) => recordProgress(event))
+        result.route = await routePromise
         results.value.push(result)
         patchState(endpoint.id, (state) => ({
           ...state,
@@ -149,6 +147,28 @@ async function run() {
     progress.value = ''
     running.value = false
   }
+}
+
+async function loadCloudflareTrace() {
+  cfTrace.value = await getCloudflareTrace()
+}
+
+async function loadRoute(endpointId: string): Promise<RouteInfo | null> {
+  if (!token.value) return null
+  try {
+    const route = await getRouteInfo(token.value, endpointId)
+    if (hasRouteInfo(route)) {
+      patchState(endpointId, (state) => ({
+        ...state,
+        route,
+        logs: ['路由诊断完成', ...state.logs].slice(0, 8),
+      }))
+      return route
+    }
+  } catch {
+    return null
+  }
+  return null
 }
 
 async function loadReportPage() {
@@ -224,10 +244,8 @@ function emptyMetrics(): LiveMetrics {
     avgPing: null,
     avgTTFB: null,
     avgTTFT: null,
-    downloadSmall: null,
-    downloadLarge: null,
-    uploadSmall: null,
-    uploadLarge: null,
+    downloadBySize: {},
+    uploadBySize: {},
   }
 }
 
@@ -265,10 +283,8 @@ function summarizeSamples(samples: DiagnoseProgressEvent[]): LiveMetrics {
     avgPing: averageMetric(ping.map((sample) => sample.duration_ms ?? null)),
     avgTTFB: averageMetric(ttfb),
     avgTTFT: averageMetric(ttft),
-    downloadSmall: speedByKind(samples, 'download', sizeLabels.value.small),
-    downloadLarge: speedByKind(samples, 'download', sizeLabels.value.large),
-    uploadSmall: speedByKind(samples, 'upload', sizeLabels.value.small),
-    uploadLarge: speedByKind(samples, 'upload', sizeLabels.value.large),
+    downloadBySize: speedsByKind(samples, 'download'),
+    uploadBySize: speedsByKind(samples, 'upload'),
   }
 }
 
@@ -278,11 +294,17 @@ function metricsFromResult(result: EndpointResult): LiveMetrics {
     avgPing: result.browser.avg_ping_ms,
     avgTTFB: result.browser.avg_ttfb_ms,
     avgTTFT: result.browser.avg_ttft_ms,
-    downloadSmall: result.browser.download_small_mbps,
-    downloadLarge: result.browser.download_large_mbps,
-    uploadSmall: result.browser.upload_small_mbps,
-    uploadLarge: result.browser.upload_large_mbps,
+    downloadBySize: result.browser.download_mbps_by_size || legacySizeMap(result.browser.download_small_mbps, result.browser.download_large_mbps),
+    uploadBySize: result.browser.upload_mbps_by_size || legacySizeMap(result.browser.upload_small_mbps, result.browser.upload_large_mbps),
   }
+}
+
+function speedsByKind(samples: DiagnoseProgressEvent[], kind: 'download' | 'upload'): Record<string, number | null> {
+  const out: Record<string, number | null> = {}
+  for (const size of sizeLabels.value) {
+    out[size] = speedByKind(samples, kind, size)
+  }
+  return out
 }
 
 function speedByKind(samples: DiagnoseProgressEvent[], kind: 'download' | 'upload', size: string): number | null {
@@ -290,6 +312,18 @@ function speedByKind(samples: DiagnoseProgressEvent[], kind: 'download' | 'uploa
     .filter((sample) => sample.kind === kind && sample.size === size && sample.mbps != null && sample.ok)
     .map((sample) => sample.mbps as number)
   return averageMetric(values)
+}
+
+function legacySizeMap(small: number | null, large: number | null): Record<string, number | null> {
+  const sizes = sizeLabels.value
+  return {
+    [sizes[0] || '64k']: small,
+    [sizes[sizes.length - 1] || '20m']: large,
+  }
+}
+
+function metricBySize(values: Record<string, number | null>, size: string): number | null {
+  return values[size] ?? null
 }
 
 function averageMetric(values: Array<number | null | undefined>): number | null {
@@ -315,6 +349,57 @@ function statusText(status: RunStatus) {
   if (status === 'done') return '完成'
   if (status === 'failed') return '失败'
   return '待开始'
+}
+
+function normalizeSizes(sizes: string[]): string[] {
+  const out = Array.from(new Set(sizes.map((item) => item.trim().toLowerCase()).filter(Boolean)))
+  return out.length > 0 ? out : ['64k', '1m', '5m', '20m']
+}
+
+function hasRouteInfo(route: RouteInfo | null): route is RouteInfo {
+  return Boolean(route && ((route.ips?.length || 0) > 0 || (route.hops?.length || 0) > 0 || route.server))
+}
+
+function traceValue(key: string): string {
+  return cfTrace.value?.[key] || '-'
+}
+
+function routeIPs(route?: RouteInfo | null): string {
+  const ips = route?.ips?.map((item) => item.ip).filter(Boolean) || []
+  return ips.length > 0 ? ips.join(' / ') : '-'
+}
+
+function routeASNs(route?: RouteInfo | null): string {
+  const items = [
+    ...(route?.ips || []).map((item) => item.asn),
+    ...(route?.hops || []).map((item) => item.asn),
+  ]
+  const labels = items
+    .filter((item): item is NonNullable<typeof item> => Boolean(item?.asn))
+    .map((item) => `AS${item.asn}${item.name ? ` ${item.name}` : ''}`)
+  return Array.from(new Set(labels)).slice(0, 4).join(' / ') || '-'
+}
+
+function routeHops(route?: RouteInfo | null): RouteHop[] {
+  return (route?.hops || []).filter((hop) => hop.ip || hop.raw).slice(0, 12)
+}
+
+function hopLabel(hop: RouteHop): string {
+  const asn = hop.asn?.asn ? `AS${hop.asn.asn}` : ''
+  const rtt = hop.rtt_ms?.length ? `${Math.round(hop.rtt_ms[0])} ms` : ''
+  return [asn, rtt].filter(Boolean).join(' · ') || '-'
+}
+
+function serverTrace(route?: RouteInfo | null): string {
+  const server = route?.server
+  if (!server) return '-'
+  if (server.error_kind) return server.error_kind
+  return [
+    server.dns_ms != null ? `DNS ${server.dns_ms}ms` : '',
+    server.tcp_ms != null ? `TCP ${server.tcp_ms}ms` : '',
+    server.tls_ms != null ? `TLS ${server.tls_ms}ms` : '',
+    server.ttfb_ms != null ? `TTFB ${server.ttfb_ms}ms` : '',
+  ].filter(Boolean).join(' / ') || '-'
 }
 </script>
 
@@ -369,12 +454,45 @@ function statusText(status: RunStatus) {
           <strong>{{ formatMs(aggregate.avgTTFT) }}</strong>
         </div>
         <div>
-          <span class="label">大包下载</span>
+          <span class="label">最大包下载 {{ largestSize }}</span>
           <strong>{{ formatMbps(aggregate.download) }}</strong>
         </div>
         <div>
-          <span class="label">大包上传</span>
+          <span class="label">最大包上传 {{ largestSize }}</span>
           <strong>{{ formatMbps(aggregate.upload) }}</strong>
+        </div>
+      </section>
+
+      <section v-if="cfTrace" class="selector-panel">
+        <div class="panel-head">
+          <h2>Cloudflare Trace</h2>
+          <span>{{ traceValue('h') }}</span>
+        </div>
+        <div class="metric-grid trace-grid">
+          <div>
+            <span class="label">边缘节点</span>
+            <strong>{{ traceValue('colo') }}</strong>
+          </div>
+          <div>
+            <span class="label">访问地区</span>
+            <strong>{{ traceValue('loc') }}</strong>
+          </div>
+          <div>
+            <span class="label">客户端 IP</span>
+            <strong>{{ traceValue('ip') }}</strong>
+          </div>
+          <div>
+            <span class="label">HTTP/TLS</span>
+            <strong>{{ traceValue('http') }} / {{ traceValue('tls') }}</strong>
+          </div>
+          <div>
+            <span class="label">WARP</span>
+            <strong>{{ traceValue('warp') }}</strong>
+          </div>
+          <div>
+            <span class="label">SNI</span>
+            <strong>{{ traceValue('sni') }}</strong>
+          </div>
         </div>
       </section>
 
@@ -453,22 +571,37 @@ function statusText(status: RunStatus) {
               <span class="label">TTFT 平均</span>
               <strong>{{ formatMs(row.state.metrics.avgTTFT) }}</strong>
             </div>
-            <div>
-              <span class="label">小包下载 {{ sizeLabels.small }}</span>
-              <strong>{{ formatMbps(row.state.metrics.downloadSmall) }}</strong>
+            <div v-for="size in sizeLabels" :key="`${row.endpoint.id}-download-${size}`">
+              <span class="label">下载 {{ size }}</span>
+              <strong>{{ formatMbps(metricBySize(row.state.metrics.downloadBySize, size)) }}</strong>
             </div>
-            <div>
-              <span class="label">大包下载 {{ sizeLabels.large }}</span>
-              <strong>{{ formatMbps(row.state.metrics.downloadLarge) }}</strong>
+            <div v-for="size in sizeLabels" :key="`${row.endpoint.id}-upload-${size}`">
+              <span class="label">上传 {{ size }}</span>
+              <strong>{{ formatMbps(metricBySize(row.state.metrics.uploadBySize, size)) }}</strong>
             </div>
-            <div>
-              <span class="label">小包上传 {{ sizeLabels.small }}</span>
-              <strong>{{ formatMbps(row.state.metrics.uploadSmall) }}</strong>
+          </div>
+          <div v-if="row.state.route" class="route-box">
+            <div class="route-summary">
+              <div>
+                <span class="label">解析 IP</span>
+                <strong>{{ routeIPs(row.state.route) }}</strong>
+              </div>
+              <div>
+                <span class="label">ASN</span>
+                <strong>{{ routeASNs(row.state.route) }}</strong>
+              </div>
+              <div>
+                <span class="label">服务端 Trace</span>
+                <strong>{{ serverTrace(row.state.route) }}</strong>
+              </div>
             </div>
-            <div>
-              <span class="label">大包上传 {{ sizeLabels.large }}</span>
-              <strong>{{ formatMbps(row.state.metrics.uploadLarge) }}</strong>
-            </div>
+            <ol v-if="routeHops(row.state.route).length" class="hop-list">
+              <li v-for="hop in routeHops(row.state.route)" :key="`${row.endpoint.id}-hop-${hop.index}-${hop.ip || hop.raw}`">
+                <span>{{ hop.index }}</span>
+                <strong>{{ hop.ip || '*' }}</strong>
+                <em>{{ hopLabel(hop) }}</em>
+              </li>
+            </ol>
           </div>
           <ol class="log-list">
             <li v-for="item in row.state.logs" :key="item">{{ item }}</li>

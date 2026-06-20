@@ -137,8 +137,8 @@ func Default() *Config {
 				Upload: "/diag/upload",
 				Stream: "/diag/stream",
 			},
-			BlobSizes:   []string{"64k", "1m"},
-			MaxBlobSize: "1m",
+			BlobSizes:   []string{"64k", "1m", "5m", "20m"},
+			MaxBlobSize: "20m",
 			Stream: StreamSpec{
 				Events:     20,
 				IntervalMS: 200,
@@ -207,7 +207,10 @@ func (c *Config) Normalize() error {
 		return fmt.Errorf("probe.paths.stream: %w", err)
 	}
 	if len(c.Probe.BlobSizes) == 0 {
-		c.Probe.BlobSizes = []string{"64k", "1m"}
+		c.Probe.BlobSizes = []string{"64k", "1m", "5m", "20m"}
+	}
+	if strings.TrimSpace(c.Probe.MaxBlobSize) == "" {
+		c.Probe.MaxBlobSize = "20m"
 	}
 	if c.Probe.Stream.Events <= 0 {
 		c.Probe.Stream.Events = 20

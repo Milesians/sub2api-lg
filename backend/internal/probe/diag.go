@@ -46,7 +46,7 @@ func (h *DiagHandlers) Blob(w http.ResponseWriter, r *http.Request) {
 	if sizeName == "" {
 		sizeName = "64k"
 	}
-	size, ok := allowedBlobSize(sizeName, h.cfg.Probe.Allow5MBlob)
+	size, ok := allowedBlobSize(sizeName, h.cfg.Probe.MaxBlobSize, h.cfg.Probe.Allow5MBlob)
 	if !ok {
 		http.Error(w, "unsupported blob size", http.StatusBadRequest)
 		return
@@ -76,7 +76,7 @@ func (h *DiagHandlers) Upload(w http.ResponseWriter, r *http.Request) {
 	if sizeName == "" {
 		sizeName = "64k"
 	}
-	size, ok := allowedBlobSize(sizeName, h.cfg.Probe.Allow5MBlob)
+	size, ok := allowedBlobSize(sizeName, h.cfg.Probe.MaxBlobSize, h.cfg.Probe.Allow5MBlob)
 	if !ok {
 		http.Error(w, "unsupported upload size", http.StatusBadRequest)
 		return
@@ -154,18 +154,48 @@ func writeSSE(w http.ResponseWriter, event string, data any) {
 	_, _ = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, b)
 }
 
-func allowedBlobSize(size string, allow5M bool) (int, bool) {
-	allowed := map[string]int{
-		"16k":  16 * 1024,
-		"64k":  64 * 1024,
-		"256k": 256 * 1024,
-		"1m":   1024 * 1024,
+func allowedBlobSize(size, maxSize string, allow5M bool) (int, bool) {
+	value, ok := parseByteSize(size)
+	if !ok || value <= 0 {
+		return 0, false
 	}
-	if allow5M {
-		allowed["5m"] = 5 * 1024 * 1024
+	max, ok := parseByteSize(maxSize)
+	if !ok || max <= 0 {
+		max = 20 * 1024 * 1024
 	}
-	v, ok := allowed[size]
-	return v, ok
+	if allow5M && max < 5*1024*1024 {
+		max = 5 * 1024 * 1024
+	}
+	if value > max {
+		return 0, false
+	}
+	return value, true
+}
+
+func parseByteSize(raw string) (int, bool) {
+	raw = strings.TrimSpace(strings.ToLower(raw))
+	matchUnit := ""
+	if strings.HasSuffix(raw, "kb") {
+		raw = strings.TrimSuffix(raw, "kb")
+		matchUnit = "k"
+	} else if strings.HasSuffix(raw, "mb") {
+		raw = strings.TrimSuffix(raw, "mb")
+		matchUnit = "m"
+	} else if strings.HasSuffix(raw, "k") || strings.HasSuffix(raw, "m") {
+		matchUnit = raw[len(raw)-1:]
+		raw = raw[:len(raw)-1]
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value <= 0 {
+		return 0, false
+	}
+	switch matchUnit {
+	case "m":
+		value *= 1024 * 1024
+	case "k":
+		value *= 1024
+	}
+	return value, true
 }
 
 func boundedInt(raw string, fallback, min, max int) int {
