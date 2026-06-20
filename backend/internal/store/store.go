@@ -158,7 +158,6 @@ CREATE TABLE IF NOT EXISTS reports (
 CREATE INDEX IF NOT EXISTS idx_sessions_token_hash ON sessions(token_hash);
 CREATE INDEX IF NOT EXISTS idx_reports_user_id ON reports(user_id);
 CREATE INDEX IF NOT EXISTS idx_reports_created_at ON reports(created_at);
-CREATE INDEX IF NOT EXISTS idx_reports_level_created ON reports(level, created_at);
 
 CREATE TABLE IF NOT EXISTS diag_events (
   id TEXT PRIMARY KEY,
@@ -215,6 +214,8 @@ CREATE TABLE IF NOT EXISTS admin_audit_logs (
 		}
 	}
 	_, err = s.db.ExecContext(ctx, `
+CREATE INDEX IF NOT EXISTS idx_reports_level_created ON reports(level, created_at);
+
 UPDATE reports
 SET customer_report_json = CASE WHEN summary_json <> '' THEN summary_json ELSE payload_json END
 WHERE customer_report_json = '{}';
@@ -225,13 +226,16 @@ UPDATE reports
 SET support_summary_json = CASE WHEN summary_json <> '' THEN summary_json ELSE '{}' END
 WHERE support_summary_json = '{}';
 UPDATE reports
+SET level = 'legacy'
+WHERE level = '';
+UPDATE reports
 SET updated_at = created_at
 WHERE updated_at = '1970-01-01T00:00:00Z';
 UPDATE reports
-SET customer_expires_at = datetime(created_at, '+72 hours')
+SET customer_expires_at = COALESCE(datetime(created_at, '+72 hours'), created_at)
 WHERE customer_expires_at = '1970-01-01T00:00:00Z';
 UPDATE reports
-SET internal_expires_at = datetime(created_at, '+72 hours')
+SET internal_expires_at = COALESCE(datetime(created_at, '+72 hours'), created_at)
 WHERE internal_expires_at = '1970-01-01T00:00:00Z';
 `)
 	return err
