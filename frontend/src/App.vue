@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { bootstrap, getCloudflareTrace, getEntrypoints, getReport, getRouteInfo, iframeContext, submitReport } from './api/client'
+import { bootstrap, getCloudflareTrace, getEntrypoints, getReport, iframeContext, submitReport } from './api/client'
 import { buildReport, diagnoseEndpoint, type DiagnoseProgressEvent } from './diagnose/runner'
-import type { BootstrapResponse, EndpointResult, EntryPoint, RouteHop, RouteInfo } from './types'
+import type { BootstrapResponse, EndpointResult, EntryPoint } from './types'
 
 type RunStatus = 'idle' | 'running' | 'done' | 'failed'
 
@@ -21,7 +21,6 @@ interface EndpointRunState {
   logs: string[]
   samples: DiagnoseProgressEvent[]
   metrics: LiveMetrics
-  route?: RouteInfo | null
   result?: EndpointResult
 }
 
@@ -113,9 +112,7 @@ async function run() {
         logs: ['准备测试'],
       }))
       try {
-        const routePromise = loadRoute(endpoint.id)
         const result = await diagnoseEndpoint(endpoint, boot.value.probe, (event) => recordProgress(event))
-        result.route = await routePromise
         results.value.push(result)
         patchState(endpoint.id, (state) => ({
           ...state,
@@ -151,24 +148,6 @@ async function run() {
 
 async function loadCloudflareTrace() {
   cfTrace.value = await getCloudflareTrace()
-}
-
-async function loadRoute(endpointId: string): Promise<RouteInfo | null> {
-  if (!token.value) return null
-  try {
-    const route = await getRouteInfo(token.value, endpointId)
-    if (hasRouteInfo(route)) {
-      patchState(endpointId, (state) => ({
-        ...state,
-        route,
-        logs: ['路由诊断完成', ...state.logs].slice(0, 8),
-      }))
-      return route
-    }
-  } catch {
-    return null
-  }
-  return null
 }
 
 async function loadReportPage() {
@@ -356,50 +335,8 @@ function normalizeSizes(sizes: string[]): string[] {
   return out.length > 0 ? out : ['64k', '1m', '5m', '20m']
 }
 
-function hasRouteInfo(route: RouteInfo | null): route is RouteInfo {
-  return Boolean(route && ((route.ips?.length || 0) > 0 || (route.hops?.length || 0) > 0 || route.server))
-}
-
 function traceValue(key: string): string {
   return cfTrace.value?.[key] || '-'
-}
-
-function routeIPs(route?: RouteInfo | null): string {
-  const ips = route?.ips?.map((item) => item.ip).filter(Boolean) || []
-  return ips.length > 0 ? ips.join(' / ') : '-'
-}
-
-function routeASNs(route?: RouteInfo | null): string {
-  const items = [
-    ...(route?.ips || []).map((item) => item.asn),
-    ...(route?.hops || []).map((item) => item.asn),
-  ]
-  const labels = items
-    .filter((item): item is NonNullable<typeof item> => Boolean(item?.asn))
-    .map((item) => `AS${item.asn}${item.name ? ` ${item.name}` : ''}`)
-  return Array.from(new Set(labels)).slice(0, 4).join(' / ') || '-'
-}
-
-function routeHops(route?: RouteInfo | null): RouteHop[] {
-  return (route?.hops || []).filter((hop) => hop.ip || hop.raw).slice(0, 12)
-}
-
-function hopLabel(hop: RouteHop): string {
-  const asn = hop.asn?.asn ? `AS${hop.asn.asn}` : ''
-  const rtt = hop.rtt_ms?.length ? `${Math.round(hop.rtt_ms[0])} ms` : ''
-  return [asn, rtt].filter(Boolean).join(' · ') || '-'
-}
-
-function serverTrace(route?: RouteInfo | null): string {
-  const server = route?.server
-  if (!server) return '-'
-  if (server.error_kind) return server.error_kind
-  return [
-    server.dns_ms != null ? `DNS ${server.dns_ms}ms` : '',
-    server.tcp_ms != null ? `TCP ${server.tcp_ms}ms` : '',
-    server.tls_ms != null ? `TLS ${server.tls_ms}ms` : '',
-    server.ttfb_ms != null ? `TTFB ${server.ttfb_ms}ms` : '',
-  ].filter(Boolean).join(' / ') || '-'
 }
 </script>
 
@@ -476,10 +413,6 @@ function serverTrace(route?: RouteInfo | null): string {
           <div>
             <span class="label">访问地区</span>
             <strong>{{ traceValue('loc') }}</strong>
-          </div>
-          <div>
-            <span class="label">客户端 IP</span>
-            <strong>{{ traceValue('ip') }}</strong>
           </div>
           <div>
             <span class="label">HTTP/TLS</span>
@@ -579,29 +512,6 @@ function serverTrace(route?: RouteInfo | null): string {
               <span class="label">上传 {{ size }}</span>
               <strong>{{ formatMbps(metricBySize(row.state.metrics.uploadBySize, size)) }}</strong>
             </div>
-          </div>
-          <div v-if="row.state.route" class="route-box">
-            <div class="route-summary">
-              <div>
-                <span class="label">解析 IP</span>
-                <strong>{{ routeIPs(row.state.route) }}</strong>
-              </div>
-              <div>
-                <span class="label">ASN</span>
-                <strong>{{ routeASNs(row.state.route) }}</strong>
-              </div>
-              <div>
-                <span class="label">服务端 Trace</span>
-                <strong>{{ serverTrace(row.state.route) }}</strong>
-              </div>
-            </div>
-            <ol v-if="routeHops(row.state.route).length" class="hop-list">
-              <li v-for="hop in routeHops(row.state.route)" :key="`${row.endpoint.id}-hop-${hop.index}-${hop.ip || hop.raw}`">
-                <span>{{ hop.index }}</span>
-                <strong>{{ hop.ip || '*' }}</strong>
-                <em>{{ hopLabel(hop) }}</em>
-              </li>
-            </ol>
           </div>
           <ol class="log-list">
             <li v-for="item in row.state.logs" :key="item">{{ item }}</li>

@@ -15,7 +15,6 @@ import (
 	"sub2api-origin-lg/backend/internal/adminclient"
 	"sub2api-origin-lg/backend/internal/config"
 	"sub2api-origin-lg/backend/internal/entrypoints"
-	"sub2api-origin-lg/backend/internal/probe"
 	"sub2api-origin-lg/backend/internal/store"
 )
 
@@ -58,7 +57,7 @@ func TestRootRedirectPreservesRouterPrefix(t *testing.T) {
 
 	admin := adminclient.New(cfg)
 	cache := entrypoints.NewCache(cfg, admin)
-	handler := New(cfg, db, cache, probe.NewServerProbe(cfg)).Handler()
+	handler := New(cfg, db, cache).Handler()
 	req := httptest.NewRequest(http.MethodGet, "/lg/?user_id=123&token=valid-token", nil)
 	res := httptest.NewRecorder()
 	handler.ServeHTTP(res, req)
@@ -173,7 +172,7 @@ func TestExpiredReportIsNotReturned(t *testing.T) {
 	}
 	admin := adminclient.New(cfg)
 	cache := entrypoints.NewCache(cfg, admin)
-	_ = New(cfg, db, cache, probe.NewServerProbe(cfg))
+	_ = New(cfg, db, cache)
 
 	report, err := db.GetReport(context.Background(), "rpt_old")
 	if err != nil {
@@ -236,7 +235,7 @@ func testServer(t *testing.T, adminBaseURL string) http.Handler {
 	t.Cleanup(func() { _ = db.Close() })
 	admin := adminclient.New(cfg)
 	cache := entrypoints.NewCache(cfg, admin)
-	return New(cfg, db, cache, probe.NewServerProbe(cfg)).Handler()
+	return New(cfg, db, cache).Handler()
 }
 
 func postBootstrap(handler http.Handler, body []byte) *httptest.ResponseRecorder {

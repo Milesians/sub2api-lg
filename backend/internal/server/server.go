@@ -24,13 +24,12 @@ import (
 )
 
 type Server struct {
-	cfg         *config.Config
-	store       *store.Store
-	cache       *entrypoints.Cache
-	admin       *adminclient.Client
-	serverProbe *probe.ServerProbe
-	diag        *probe.DiagHandlers
-	staticDir   string
+	cfg       *config.Config
+	store     *store.Store
+	cache     *entrypoints.Cache
+	admin     *adminclient.Client
+	diag      *probe.DiagHandlers
+	staticDir string
 }
 
 const (
@@ -38,15 +37,14 @@ const (
 	reportCleanupInterval = time.Hour
 )
 
-func New(cfg *config.Config, db *store.Store, cache *entrypoints.Cache, serverProbe *probe.ServerProbe) *Server {
+func New(cfg *config.Config, db *store.Store, cache *entrypoints.Cache) *Server {
 	server := &Server{
-		cfg:         cfg,
-		store:       db,
-		cache:       cache,
-		admin:       adminclient.New(cfg),
-		serverProbe: serverProbe,
-		diag:        probe.NewDiagHandlers(cfg),
-		staticDir:   "frontend/dist",
+		cfg:       cfg,
+		store:     db,
+		cache:     cache,
+		admin:     adminclient.New(cfg),
+		diag:      probe.NewDiagHandlers(cfg),
+		staticDir: "frontend/dist",
 	}
 	server.cleanupExpiredReports(context.Background())
 	server.startReportCleanup()
@@ -79,8 +77,6 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 		s.bootstrap(w, r)
 	case r.Method == http.MethodGet && path == "/api/entrypoints":
 		s.requireSession(s.entrypoints)(w, r)
-	case r.Method == http.MethodGet && path == "/api/route":
-		s.requireSession(s.routeDiagnostics)(w, r)
 	case r.Method == http.MethodPost && path == "/api/reports":
 		s.requireSession(s.createReport)(w, r)
 	case r.Method == http.MethodGet && strings.HasPrefix(path, "/api/reports/"):
@@ -260,45 +256,6 @@ func (s *Server) entrypoints(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, snapshot)
 }
 
-func (s *Server) routeDiagnostics(w http.ResponseWriter, r *http.Request) {
-	endpointID := strings.TrimSpace(r.URL.Query().Get("endpoint_id"))
-	if endpointID == "" {
-		http.Error(w, "endpoint_id is required", http.StatusBadRequest)
-		return
-	}
-	snapshot, err := s.cache.Get(r.Context(), false)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
-		return
-	}
-	endpoint := findEndpointByID(snapshot, endpointID)
-	if endpoint == nil {
-		http.NotFound(w, r)
-		return
-	}
-
-	timeoutMS := s.cfg.Probe.ServerTimeoutMS
-	if timeoutMS < 8000 {
-		timeoutMS = 8000
-	}
-	if timeoutMS > 20000 {
-		timeoutMS = 20000
-	}
-	ctx, cancel := probe.ContextWithTimeout(r.Context(), timeoutMS)
-	defer cancel()
-	info := probe.RouteDiagnostics(ctx, endpoint.Host)
-
-	if s.serverProbe != nil {
-		probeCtx, probeCancel := probe.ContextWithTimeout(r.Context(), s.cfg.Probe.ServerTimeoutMS)
-		result := s.serverProbe.ProbePing(probeCtx, endpoint.LGBaseURL)
-		probeCancel()
-		if result.Enabled {
-			info.Server = &result
-		}
-	}
-	writeJSON(w, info)
-}
-
 func (s *Server) createReport(w http.ResponseWriter, r *http.Request) {
 	session := sessionFromContext(r.Context())
 	var payload map[string]any
@@ -306,8 +263,6 @@ func (s *Server) createReport(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	probe.AttachServerResults(r.Context(), s.serverProbe, payload)
-
 	reportID := "rpt_" + time.Now().Format("20060102_") + randomToken(12)
 	now := time.Now()
 	s.cleanupExpiredReports(r.Context())
@@ -666,18 +621,6 @@ func snapshotSource(snapshot *entrypoints.Snapshot) string {
 		return ""
 	}
 	return snapshot.Source
-}
-
-func findEndpointByID(snapshot *entrypoints.Snapshot, id string) *entrypoints.EntryPoint {
-	if snapshot == nil {
-		return nil
-	}
-	for i := range snapshot.Entrypoints {
-		if snapshot.Entrypoints[i].ID == id {
-			return &snapshot.Entrypoints[i]
-		}
-	}
-	return nil
 }
 
 func sanitizeReportPayload(payload map[string]any) {

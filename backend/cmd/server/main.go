@@ -13,7 +13,6 @@ import (
 	"sub2api-origin-lg/backend/internal/adminclient"
 	"sub2api-origin-lg/backend/internal/config"
 	"sub2api-origin-lg/backend/internal/entrypoints"
-	"sub2api-origin-lg/backend/internal/probe"
 	"sub2api-origin-lg/backend/internal/server"
 	"sub2api-origin-lg/backend/internal/store"
 )
@@ -32,9 +31,8 @@ func main() {
 
 	admin := adminclient.New(cfg)
 	cache := entrypoints.NewCache(cfg, admin)
-	serverProbe := probe.NewServerProbe(cfg)
 
-	app := server.New(cfg, db, cache, serverProbe)
+	app := server.New(cfg, db, cache)
 	srv := &http.Server{
 		Addr:              cfg.App.Listen,
 		Handler:           app.Handler(),

@@ -50,17 +50,14 @@ type Sub2APIConfig struct {
 }
 
 type ProbeConfig struct {
-	BrowserRepeat      int        `yaml:"browser_repeat" json:"browser_repeat"`
-	BrowserTimeoutMS   int        `yaml:"browser_timeout_ms" json:"browser_timeout_ms"`
-	ServerProbeEnabled bool       `yaml:"server_probe_enabled" json:"server_probe_enabled"`
-	ServerRepeat       int        `yaml:"server_repeat" json:"server_repeat"`
-	ServerTimeoutMS    int        `yaml:"server_timeout_ms" json:"server_timeout_ms"`
-	EnableICMP         bool       `yaml:"enable_icmp" json:"enable_icmp"`
-	Paths              ProbePaths `yaml:"paths" json:"paths"`
-	BlobSizes          []string   `yaml:"blob_sizes" json:"blob_sizes"`
-	MaxBlobSize        string     `yaml:"max_blob_size" json:"max_blob_size"`
-	Allow5MBlob        bool       `yaml:"allow_5m_blob" json:"allow_5m_blob"`
-	Stream             StreamSpec `yaml:"stream" json:"stream"`
+	BrowserRepeat    int        `yaml:"browser_repeat" json:"browser_repeat"`
+	BrowserTimeoutMS int        `yaml:"browser_timeout_ms" json:"browser_timeout_ms"`
+	EnableICMP       bool       `yaml:"enable_icmp" json:"enable_icmp"`
+	Paths            ProbePaths `yaml:"paths" json:"paths"`
+	BlobSizes        []string   `yaml:"blob_sizes" json:"blob_sizes"`
+	MaxBlobSize      string     `yaml:"max_blob_size" json:"max_blob_size"`
+	Allow5MBlob      bool       `yaml:"allow_5m_blob" json:"allow_5m_blob"`
+	Stream           StreamSpec `yaml:"stream" json:"stream"`
 }
 
 type ProbePaths struct {
@@ -126,11 +123,8 @@ func Default() *Config {
 			EndpointCacheTTLSeconds: 60,
 		},
 		Probe: ProbeConfig{
-			BrowserRepeat:      5,
-			BrowserTimeoutMS:   8000,
-			ServerProbeEnabled: true,
-			ServerRepeat:       3,
-			ServerTimeoutMS:    5000,
+			BrowserRepeat:    5,
+			BrowserTimeoutMS: 8000,
 			Paths: ProbePaths{
 				Ping:   "/diag/ping",
 				Blob:   "/diag/blob",
@@ -183,12 +177,6 @@ func (c *Config) Normalize() error {
 	}
 	if c.Probe.BrowserTimeoutMS <= 0 {
 		c.Probe.BrowserTimeoutMS = 8000
-	}
-	if c.Probe.ServerRepeat <= 0 {
-		c.Probe.ServerRepeat = 3
-	}
-	if c.Probe.ServerTimeoutMS <= 0 {
-		c.Probe.ServerTimeoutMS = 5000
 	}
 	c.Probe.Paths.Ping, err = ValidatePublicPath(defaultString(c.Probe.Paths.Ping, "/diag/ping"))
 	if err != nil {
@@ -281,9 +269,6 @@ func applyEnv(c *Config) {
 
 	setInt(&c.Probe.BrowserRepeat, "BROWSER_PROBE_REPEAT")
 	setInt(&c.Probe.BrowserTimeoutMS, "BROWSER_PROBE_TIMEOUT_MS")
-	setBool(&c.Probe.ServerProbeEnabled, "SERVER_PROBE_ENABLED")
-	setInt(&c.Probe.ServerRepeat, "SERVER_PROBE_REPEAT")
-	setInt(&c.Probe.ServerTimeoutMS, "SERVER_PROBE_TIMEOUT_MS")
 	setBool(&c.Probe.EnableICMP, "ENABLE_ICMP")
 	setString(&c.Probe.Paths.Ping, "PROBE_PATH_PING")
 	setString(&c.Probe.Paths.Blob, "PROBE_PATH_BLOB")

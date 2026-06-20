@@ -259,57 +259,6 @@ h2 {
   margin-top: 12px;
 }
 
-.route-box {
-  border-top: 1px solid #edf0f5;
-  padding-top: 12px;
-}
-
-.route-summary {
-  display: grid;
-  gap: 10px;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-
-.route-summary > div {
-  min-width: 0;
-}
-
-.route-summary strong {
-  display: block;
-  font-size: 13px;
-  overflow-wrap: anywhere;
-}
-
-.hop-list {
-  display: grid;
-  gap: 6px;
-  list-style: none;
-  margin: 10px 0 0;
-  max-height: 150px;
-  overflow: auto;
-  padding: 0;
-}
-
-.hop-list li {
-  align-items: center;
-  display: grid;
-  gap: 8px;
-  grid-template-columns: 24px minmax(0, 1fr) minmax(70px, auto);
-  min-width: 0;
-}
-
-.hop-list span,
-.hop-list em {
-  color: #5f6c7b;
-  font-size: 12px;
-  font-style: normal;
-}
-
-.hop-list strong {
-  font-size: 12px;
-  overflow-wrap: anywhere;
-}
-
 .log-list {
   background: #f5f7fb;
   border-radius: 8px;
@@ -430,10 +379,6 @@ th {
   .metric-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
-
-  .route-summary {
-    grid-template-columns: 1fr;
-  }
 }
 
 @media (prefers-color-scheme: dark) {
@@ -473,15 +418,9 @@ th {
   .endpoint-main span,
   .card-head p,
   .current-line,
-  .hop-list span,
-  .hop-list em,
   .panel-head span,
   .label {
     color: #aeb9c7;
-  }
-
-  .route-box {
-    border-top-color: #2b3544;
   }
 
   th {

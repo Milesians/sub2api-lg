@@ -26,9 +26,6 @@ sub2api:
 probe:
   browser_repeat: 5
   browser_timeout_ms: 8000
-  server_probe_enabled: true
-  server_repeat: 3
-  server_timeout_ms: 5000
   enable_icmp: false
   paths:
     ping: "/diag/ping"

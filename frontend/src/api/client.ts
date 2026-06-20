@@ -1,4 +1,4 @@
-import type { BootstrapResponse, RouteInfo } from '../types'
+import type { BootstrapResponse } from '../types'
 import { apiURL } from '../utils/url'
 
 export function iframeContext(): Record<string, string> {
@@ -37,17 +37,6 @@ export async function getEntrypoints(token: string, refresh = false) {
   return res.json()
 }
 
-export async function getRouteInfo(token: string, endpointId: string): Promise<RouteInfo> {
-  const url = new URL(apiURL('/route'), window.location.origin)
-  url.searchParams.set('endpoint_id', endpointId)
-  const res = await fetch(url.toString(), {
-    headers: { Authorization: `Bearer ${token}` },
-    cache: 'no-store',
-  })
-  if (!res.ok) throw new Error(`route diagnostics failed: ${res.status}`)
-  return res.json()
-}
-
 export async function getCloudflareTrace(): Promise<Record<string, string> | null> {
   const ctx = iframeContext()
   const origins = uniqueOrigins([ctx.src_url, ctx.src_host, window.location.origin])
@@ -56,7 +45,8 @@ export async function getCloudflareTrace(): Promise<Record<string, string> | nul
       const res = await fetch(`${origin}/cdn-cgi/trace`, { cache: 'no-store' })
       if (!res.ok) continue
       const parsed = parseTrace(await res.text())
-      if (parsed.colo || parsed.fl || parsed.ip) return parsed
+      delete parsed.ip
+      if (parsed.colo || parsed.fl) return parsed
     } catch {
       // Cross-origin or non-Cloudflare hosts are expected; just hide this panel.
     }

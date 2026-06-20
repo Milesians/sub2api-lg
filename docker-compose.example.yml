@@ -28,9 +28,6 @@ services:
       DIAG_SESSION_TTL_SECONDS: "1800"
       BROWSER_PROBE_REPEAT: "5"
       BROWSER_PROBE_TIMEOUT_MS: "8000"
-      SERVER_PROBE_ENABLED: "true"
-      SERVER_PROBE_REPEAT: "3"
-      SERVER_PROBE_TIMEOUT_MS: "5000"
       ENABLE_ICMP: "false"
     security_opt:
       - no-new-privileges:true
