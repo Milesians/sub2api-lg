@@ -75,6 +75,34 @@ export interface EndpointResult {
   base_url: string
   lg_base_url: string
   browser: BrowserSummary
+  client_trace?: ClientTraceInfo | null
   level: 'good' | 'warning' | 'bad'
   recommendation: string
+}
+
+export interface ASNInfo {
+  asn?: string
+  prefix?: string
+  cc?: string
+  registry?: string
+  allocated?: string
+  name?: string
+}
+
+export interface TraceIPInfo {
+  ip: string
+  asn?: ASNInfo | null
+}
+
+export interface ClientTraceInfo {
+  source: 'browser'
+  host: string
+  checked_at: string
+  ips?: TraceIPInfo[]
+  avg_ping_ms?: number | null
+  avg_ttfb_ms?: number | null
+  avg_ttft_ms?: number | null
+  ping_success_rate?: number | null
+  note?: string
+  error?: string
 }

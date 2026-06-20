@@ -283,6 +283,60 @@ h2 {
   margin-top: 12px;
 }
 
+.client-trace {
+  border: 1px solid #d8dee8;
+  border-radius: 8px;
+  display: grid;
+  gap: 10px;
+  padding: 10px;
+}
+
+.route-summary {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+}
+
+.route-summary > div {
+  min-width: 0;
+}
+
+.route-summary strong {
+  display: block;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.trace-table {
+  border: 1px solid #edf0f5;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.trace-row {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(120px, 1.1fr) minmax(80px, 0.5fr) minmax(160px, 1.2fr) minmax(120px, 1fr);
+}
+
+.trace-row span {
+  border-top: 1px solid #edf0f5;
+  font-size: 12px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  padding: 7px 8px;
+}
+
+.trace-head {
+  background: #f0f3f8;
+  color: #3d4b5c;
+  font-weight: 600;
+}
+
+.trace-head span {
+  border-top: 0;
+}
+
 .log-list {
   background: #f5f7fb;
   border-radius: 8px;
@@ -407,6 +461,11 @@ th {
   .metric-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  .route-summary,
+  .trace-row {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (prefers-color-scheme: dark) {
@@ -441,6 +500,17 @@ th {
   .meter,
   .log-list {
     background: #202938;
+  }
+
+  .client-trace,
+  .trace-table,
+  .trace-row span {
+    border-color: #2b3544;
+  }
+
+  .trace-head {
+    background: #202938;
+    color: #d8e0ea;
   }
 
   .log-list,

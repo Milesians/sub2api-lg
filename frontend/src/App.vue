@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { bootstrap, getCloudflareTrace, getEntrypoints, getReport, iframeContext, submitReport } from './api/client'
+import { asnLabel, traceEndpointFromBrowser, uniqueASNLabels } from './diagnose/client-trace'
 import { buildReport, diagnoseEndpoint, type DiagnoseProgressEvent } from './diagnose/runner'
-import type { BootstrapResponse, EndpointResult, EntryPoint } from './types'
+import type { BootstrapResponse, ClientTraceInfo, EndpointResult, EntryPoint } from './types'
 
 type RunStatus = 'idle' | 'running' | 'done' | 'failed'
 
@@ -23,6 +24,7 @@ interface EndpointRunState {
   samples: DiagnoseProgressEvent[]
   metrics: LiveMetrics
   originPeerIPs: string[]
+  clientTrace?: ClientTraceInfo | null
   result?: EndpointResult
 }
 
@@ -127,11 +129,14 @@ async function run() {
       }))
       try {
         const result = await diagnoseEndpoint(endpoint, boot.value.probe, (event) => recordProgress(event))
+        const clientTrace = await diagnoseClientTrace(endpoint, result)
+        result.client_trace = clientTrace
         results.value.push(result)
         patchState(endpoint.id, (state) => ({
           ...state,
           status: 'done',
           current: '完成',
+          clientTrace,
           result,
           metrics: metricsFromResult(result),
           logs: [`完成，成功率 ${pct(result.browser.success_rate)}`, ...state.logs].slice(0, 8),
@@ -162,6 +167,36 @@ async function run() {
 
 async function loadCloudflareTrace() {
   cfTrace.value = await getCloudflareTrace()
+}
+
+async function diagnoseClientTrace(endpoint: EntryPoint, result: EndpointResult): Promise<ClientTraceInfo | null> {
+  patchState(endpoint.id, (state) => ({
+    ...state,
+    current: '客户端 Trace 中',
+    logs: ['客户端 Trace 中', ...state.logs].slice(0, 8),
+  }))
+  try {
+    const clientTrace = await traceEndpointFromBrowser(endpoint, result.browser)
+    patchState(endpoint.id, (state) => ({
+      ...state,
+      clientTrace,
+      logs: [`客户端 Trace 完成：${clientTrace.ips?.length || 0} 个 IP`, ...state.logs].slice(0, 8),
+    }))
+    return clientTrace
+  } catch (e) {
+    const clientTrace: ClientTraceInfo = {
+      source: 'browser',
+      host: endpoint.host,
+      checked_at: new Date().toISOString(),
+      error: String((e as Error)?.message || e),
+    }
+    patchState(endpoint.id, (state) => ({
+      ...state,
+      clientTrace,
+      logs: [`客户端 Trace 失败：${clientTrace.error}`, ...state.logs].slice(0, 8),
+    }))
+    return clientTrace
+  }
 }
 
 async function loadReportPage() {
@@ -391,6 +426,27 @@ function normalizeSizes(sizes: string[]): string[] {
 
 function traceValue(key: string): string {
   return cfTrace.value?.[key] || '-'
+}
+
+function traceIPs(trace: ClientTraceInfo | null | undefined): string {
+  if (!trace?.ips?.length) return '-'
+  return trace.ips.map((item) => item.ip).join(' / ')
+}
+
+function traceASNs(trace: ClientTraceInfo | null | undefined): string {
+  return uniqueASNLabels(trace?.ips)
+}
+
+function traceNetworks(trace: ClientTraceInfo | null | undefined): string {
+  if (!trace?.ips?.length) return '-'
+  const names = trace.ips.map((item) => item.asn?.name).filter(Boolean) as string[]
+  return Array.from(new Set(names)).join(' / ') || '-'
+}
+
+function traceNote(trace: ClientTraceInfo | null | undefined): string {
+  if (trace?.error) return trace.error
+  if (trace?.note === 'browser_hop_trace_unavailable') return '浏览器不可获取逐跳 hop'
+  return '-'
 }
 
 function buildManualEndpoint(rawURL: string, rawName: string): EntryPoint {
@@ -633,6 +689,52 @@ function manualEndpointID(value: string): string {
             <div v-for="size in sizeLabels" :key="`${row.endpoint.id}-upload-${size}`">
               <span class="label">上传 {{ size }}</span>
               <strong>{{ formatMbps(metricBySize(row.state.metrics.uploadBySize, size)) }}</strong>
+            </div>
+          </div>
+          <div v-if="row.state.clientTrace" class="client-trace">
+            <div class="route-summary">
+              <div>
+                <span class="label">端点解析 IP</span>
+                <strong>{{ traceIPs(row.state.clientTrace) }}</strong>
+              </div>
+              <div>
+                <span class="label">端点 ASN</span>
+                <strong>{{ traceASNs(row.state.clientTrace) }}</strong>
+              </div>
+              <div>
+                <span class="label">网络归属</span>
+                <strong>{{ traceNetworks(row.state.clientTrace) }}</strong>
+              </div>
+              <div>
+                <span class="label">Ping 平均</span>
+                <strong>{{ formatMs(row.state.clientTrace.avg_ping_ms) }}</strong>
+              </div>
+              <div>
+                <span class="label">TTFB 平均</span>
+                <strong>{{ formatMs(row.state.clientTrace.avg_ttfb_ms) }}</strong>
+              </div>
+              <div>
+                <span class="label">TTFT 平均</span>
+                <strong>{{ formatMs(row.state.clientTrace.avg_ttft_ms) }}</strong>
+              </div>
+              <div>
+                <span class="label">Trace 状态</span>
+                <strong>{{ traceNote(row.state.clientTrace) }}</strong>
+              </div>
+            </div>
+            <div v-if="row.state.clientTrace.ips?.length" class="trace-table">
+              <div class="trace-row trace-head">
+                <span>IP</span>
+                <span>ASN</span>
+                <span>网络</span>
+                <span>Prefix</span>
+              </div>
+              <div v-for="ip in row.state.clientTrace.ips" :key="`${row.endpoint.id}-${ip.ip}`" class="trace-row">
+                <span>{{ ip.ip }}</span>
+                <span>{{ asnLabel(ip.asn) }}</span>
+                <span>{{ ip.asn?.name || '-' }}</span>
+                <span>{{ ip.asn?.prefix || '-' }}</span>
+              </div>
             </div>
           </div>
           <ol class="log-list">
