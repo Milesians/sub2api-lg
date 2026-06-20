@@ -54,15 +54,15 @@ func TestRootRedirectPreservesRouterPrefix(t *testing.T) {
 	admin := adminclient.New(cfg)
 	cache := entrypoints.NewCache(cfg, admin)
 	handler := New(cfg, db, cache, probe.NewServerProbe(cfg)).Handler()
-	req := httptest.NewRequest(http.MethodGet, "/lg/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/lg/?user_id=123&token=valid-token", nil)
 	res := httptest.NewRecorder()
 	handler.ServeHTTP(res, req)
 
 	if res.Code != http.StatusFound {
 		t.Fatalf("redirect status = %d, want 302", res.Code)
 	}
-	if location := res.Header().Get("Location"); location != "/lg/embed" {
-		t.Fatalf("redirect location = %q, want /lg/embed", location)
+	if location := res.Header().Get("Location"); location != "/lg/embed?user_id=123&token=valid-token" {
+		t.Fatalf("redirect location = %q, want /lg/embed?user_id=123&token=valid-token", location)
 	}
 }
 
