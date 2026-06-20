@@ -217,7 +217,7 @@ CREATE TABLE IF NOT EXISTS admin_audit_logs (
 CREATE INDEX IF NOT EXISTS idx_reports_level_created ON reports(level, created_at);
 
 UPDATE reports
-SET customer_report_json = CASE WHEN summary_json <> '' THEN summary_json ELSE payload_json END
+SET customer_report_json = CASE WHEN summary_json <> '' THEN summary_json ELSE '{}' END
 WHERE customer_report_json = '{}';
 UPDATE reports
 SET internal_report_json = payload_json
@@ -271,6 +271,20 @@ FROM sessions WHERE token_hash = ?`, hash)
 	}
 	if time.Now().After(session.ExpiresAt) {
 		return nil, nil
+	}
+	return &session, nil
+}
+
+func (s *Store) GetSession(ctx context.Context, id string) (*Session, error) {
+	row := s.db.QueryRowContext(ctx, `
+SELECT id, token_hash, user_id, username, session_type, scopes_json, parent_origin, src_host, src_url, ticket_id, theme, lang, created_at, expires_at
+FROM sessions WHERE id = ?`, id)
+	var session Session
+	if err := row.Scan(&session.ID, &session.TokenHash, &session.UserID, &session.Username, &session.SessionType, &session.ScopesJSON, &session.ParentOrigin, &session.SrcHost, &session.SrcURL, &session.TicketID, &session.Theme, &session.Lang, &session.CreatedAt, &session.ExpiresAt); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
 	}
 	return &session, nil
 }
@@ -527,8 +541,6 @@ func normalizeReport(report *Report) {
 	if len(report.CustomerReportJSON) == 0 {
 		if len(report.SummaryJSON) > 0 {
 			report.CustomerReportJSON = report.SummaryJSON
-		} else if len(report.PayloadJSON) > 0 {
-			report.CustomerReportJSON = report.PayloadJSON
 		} else {
 			report.CustomerReportJSON = json.RawMessage(`{}`)
 		}

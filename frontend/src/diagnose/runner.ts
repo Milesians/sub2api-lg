@@ -213,11 +213,18 @@ export async function diagnoseEndpoint(
   }
 }
 
-export function buildReport(runID: string, samples: DiagnoseProgressEvent[]) {
+export function buildReport(
+  runID: string,
+  samples: DiagnoseProgressEvent[],
+  endpointLabels: Record<string, string> = {},
+  customEndpoints: Array<{ endpoint_public_id: string; display_name: string; probe_base_url: string }> = [],
+) {
   return {
     schema_version: '2.0',
     run_id: runID,
     client_env: clientEnv(),
+    endpoint_labels: endpointLabels,
+    custom_endpoints: customEndpoints,
     samples: samples.map((sample) => ({
       endpoint_public_id: sample.endpoint_public_id,
       kind: sample.kind,

@@ -14,6 +14,7 @@ import (
 	"sub2api-origin-lg/backend/internal/adminclient"
 	"sub2api-origin-lg/backend/internal/entrypoints"
 	"sub2api-origin-lg/backend/internal/store"
+	"sub2api-origin-lg/backend/internal/urlx"
 )
 
 type iframeBootstrapRequest struct {
@@ -227,7 +228,8 @@ func (s *Server) createCustomerReport(w http.ResponseWriter, r *http.Request) {
 		shareURL += "?share_token=" + url.QueryEscape(shareToken)
 	}
 	snapshot, _ := s.cache.Get(r.Context(), false)
-	customerReport, internalReport, supportSummary, meta := buildReports(reportID, session, req, snapshot, now)
+	customEntrypoints := s.customerCustomEntrypoints(req.CustomEndpoints)
+	customerReport, internalReport, supportSummary, meta := buildReports(reportID, session, req, snapshot, customEntrypoints, now)
 	customerJSON, _ := json.Marshal(customerReport)
 	internalJSON, _ := json.Marshal(internalReport)
 	supportJSON, _ := json.Marshal(supportSummary)
@@ -324,11 +326,13 @@ func (s *Server) getAdminReport(w http.ResponseWriter, r *http.Request) {
 	}
 	runID := internalRunID(report.InternalReportJSON)
 	events, _ := s.store.ListDiagEvents(r.Context(), runID, nil)
+	ownerSession, _ := s.store.GetSession(r.Context(), report.SessionID)
 	writeJSON(w, map[string]any{
 		"report_id":              report.ID,
 		"customer_report":        report.CustomerReportJSON,
 		"internal_report":        report.InternalReportJSON,
 		"support_summary":        report.SupportSummaryJSON,
+		"owner_session":          adminSessionInfo(ownerSession),
 		"diag_events_available":  len(events) > 0,
 		"server_probe_available": false,
 		"customer_share_enabled": report.ShareEnabled,
@@ -410,10 +414,18 @@ func reportShareAllowed(report *store.Report, shareToken string) bool {
 }
 
 type customerReportRequest struct {
-	SchemaVersion string            `json:"schema_version"`
-	RunID         string            `json:"run_id"`
-	ClientEnv     map[string]string `json:"client_env"`
-	Samples       []customerSample  `json:"samples"`
+	SchemaVersion   string                   `json:"schema_version"`
+	RunID           string                   `json:"run_id"`
+	ClientEnv       map[string]string        `json:"client_env"`
+	EndpointLabels  map[string]string        `json:"endpoint_labels"`
+	CustomEndpoints []customerCustomEndpoint `json:"custom_endpoints"`
+	Samples         []customerSample         `json:"samples"`
+}
+
+type customerCustomEndpoint struct {
+	EndpointPublicID string `json:"endpoint_public_id"`
+	DisplayName      string `json:"display_name"`
+	ProbeBaseURL     string `json:"probe_base_url"`
 }
 
 type customerSample struct {
@@ -439,10 +451,15 @@ type reportMeta struct {
 	ProblemCodes []string
 }
 
-func buildReports(reportID string, session *store.Session, req customerReportRequest, snapshot *entrypoints.Snapshot, now time.Time) (map[string]any, map[string]any, map[string]any, reportMeta) {
+func buildReports(reportID string, session *store.Session, req customerReportRequest, snapshot *entrypoints.Snapshot, customEntrypoints []entrypoints.EntryPoint, now time.Time) (map[string]any, map[string]any, map[string]any, reportMeta) {
 	entrypointMap := map[string]entrypoints.EntryPoint{}
 	if snapshot != nil {
 		for _, ep := range snapshot.Entrypoints {
+			entrypointMap[ep.ID] = ep
+		}
+	}
+	for _, ep := range customEntrypoints {
+		if ep.ID != "" {
 			entrypointMap[ep.ID] = ep
 		}
 	}
@@ -471,6 +488,9 @@ func buildReports(reportID string, session *store.Session, req customerReportReq
 	for _, id := range ids {
 		ep := entrypointMap[id]
 		displayName := ep.Name
+		if displayName == "" {
+			displayName = safeDisplayLabel(req.EndpointLabels[id])
+		}
 		if displayName == "" {
 			displayName = "入口 " + id
 		}
@@ -557,10 +577,11 @@ func buildReports(reportID string, session *store.Session, req customerReportReq
 		"run_id":         safeIdentifier(req.RunID),
 		"owner_user_id":  session.UserID,
 		"entrypoint_inventory": map[string]any{
-			"admin_raw_count": len(snapshotEntrypoints(snapshot)),
-			"valid_count":     len(snapshotEntrypoints(snapshot)),
-			"filtered_count":  0,
-			"filtered":        []any{},
+			"admin_raw_count":       len(snapshotEntrypoints(snapshot)),
+			"valid_count":           len(snapshotEntrypoints(snapshot)) + len(customEntrypoints),
+			"customer_custom_count": len(customEntrypoints),
+			"filtered_count":        0,
+			"filtered":              []any{},
 		},
 		"entrypoints":      internalEntrypoints,
 		"diag_request_ids": requestIDs,
@@ -704,6 +725,129 @@ func safeEntrypoints(snapshot *entrypoints.Snapshot) []map[string]any {
 	return out
 }
 
+const maxCustomerCustomEndpoints = 8
+
+func (s *Server) customerCustomEntrypoints(items []customerCustomEndpoint) []entrypoints.EntryPoint {
+	out := make([]entrypoints.EntryPoint, 0, min(len(items), maxCustomerCustomEndpoints))
+	seen := map[string]bool{}
+	for _, item := range items {
+		if len(out) >= maxCustomerCustomEndpoints {
+			break
+		}
+		id := safeIdentifier(item.EndpointPublicID)
+		if id == "" || !strings.HasPrefix(id, "custom_") || seen[id] {
+			continue
+		}
+		ep, ok := s.customerCustomEntrypoint(id, item)
+		if !ok {
+			continue
+		}
+		seen[id] = true
+		out = append(out, ep)
+	}
+	return out
+}
+
+func (s *Server) customerCustomEntrypoint(id string, item customerCustomEndpoint) (entrypoints.EntryPoint, bool) {
+	parsed, err := url.Parse(strings.TrimSpace(item.ProbeBaseURL))
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return entrypoints.EntryPoint{}, false
+	}
+	parsed.Scheme = strings.ToLower(parsed.Scheme)
+	parsed.Host = strings.ToLower(parsed.Host)
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+	if !s.customerCustomEndpointAllowed(parsed) {
+		return entrypoints.EntryPoint{}, false
+	}
+	parsed.Path = customProbePath(parsed.Path, s.cfg.App.PublicPath)
+	name := safeDisplayLabel(item.DisplayName)
+	if name == "" {
+		name = "自定义入口"
+	}
+	return entrypoints.EntryPoint{
+		ID:          id,
+		Source:      "customer_custom",
+		Name:        name,
+		Description: "customer supplied endpoint",
+		BaseURL:     customBaseURL(parsed, s.cfg.App.PublicPath),
+		PublicPath:  s.cfg.App.PublicPath,
+		LGBaseURL:   strings.TrimRight(parsed.String(), "/"),
+		Origin:      urlx.Origin(parsed),
+		Host:        parsed.Host,
+		Scheme:      parsed.Scheme,
+		Enabled:     true,
+	}, true
+}
+
+func (s *Server) customerCustomEndpointAllowed(u *url.URL) bool {
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return false
+	}
+	if s.cfg.App.Env == "production" && u.Scheme == "http" && !s.cfg.Security.AllowHTTPEndpoints {
+		return false
+	}
+	if !s.cfg.Security.AllowPrivateEndpoints && urlx.IsPrivateHost(u.Hostname()) {
+		return false
+	}
+	return true
+}
+
+func customProbePath(currentPath, publicPath string) string {
+	cleanPublicPath := strings.TrimRight("/"+strings.TrimLeft(publicPath, "/"), "/")
+	if cleanPublicPath == "" {
+		cleanPublicPath = "/"
+	}
+	pathValue := strings.TrimRight(currentPath, "/")
+	if pathValue == "" {
+		return cleanPublicPath
+	}
+	if pathValue == cleanPublicPath || strings.HasSuffix(pathValue, cleanPublicPath) {
+		return pathValue
+	}
+	return pathValue + cleanPublicPath
+}
+
+func customBaseURL(probeURL *url.URL, publicPath string) string {
+	base := *probeURL
+	cleanPublicPath := strings.TrimRight("/"+strings.TrimLeft(publicPath, "/"), "/")
+	pathValue := strings.TrimRight(base.Path, "/")
+	switch {
+	case cleanPublicPath == "" || cleanPublicPath == "/":
+		base.Path = ""
+	case pathValue == cleanPublicPath:
+		base.Path = ""
+	case strings.HasSuffix(pathValue, cleanPublicPath):
+		base.Path = strings.TrimRight(strings.TrimSuffix(pathValue, cleanPublicPath), "/")
+	default:
+		base.Path = pathValue
+	}
+	base.RawQuery = ""
+	base.Fragment = ""
+	return strings.TrimRight(base.String(), "/")
+}
+
+func adminSessionInfo(session *store.Session) map[string]any {
+	if session == nil {
+		return map[string]any{}
+	}
+	return map[string]any{
+		"session_id":    session.ID,
+		"user_id":       session.UserID,
+		"username":      session.Username,
+		"session_type":  session.SessionType,
+		"parent_origin": session.ParentOrigin,
+		"src_host":      session.SrcHost,
+		"src_url":       session.SrcURL,
+		"ticket_id":     session.TicketID,
+		"theme":         session.Theme,
+		"lang":          session.Lang,
+		"created_at":    session.CreatedAt,
+		"expires_at":    session.ExpiresAt,
+		"scopes_json":   session.ScopesJSON,
+	}
+}
+
 func adminReportItem(report store.Report) map[string]any {
 	summary := map[string]any{}
 	_ = json.Unmarshal(report.SupportSummaryJSON, &summary)
@@ -823,6 +967,17 @@ func sanitizeClientEnv(env map[string]string) map[string]string {
 		}
 	}
 	return out
+}
+
+func safeDisplayLabel(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" || strings.Contains(value, "://") || strings.Contains(value, ".") {
+		return ""
+	}
+	if len([]rune(value)) > 40 {
+		return string([]rune(value)[:40])
+	}
+	return value
 }
 
 func safeIdentifier(value string) string {

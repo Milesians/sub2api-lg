@@ -5,11 +5,10 @@ import { buildReport, diagnoseEndpoint, type DiagnoseProgressEvent } from './dia
 import type { BootstrapResponse, EndpointResult, EntryPoint } from './types'
 
 type RunStatus = 'idle' | 'running' | 'done' | 'failed'
+type ViewMode = 'customer' | 'report' | 'admin'
 
 interface LiveMetrics {
   successRate: number | null
-  endpointPingSuccessRate: number | null
-  avgEndpointPing: number | null
   pingSuccessRate: number | null
   avgPing: number | null
   avgTTFB: number | null
@@ -32,26 +31,33 @@ const running = ref(false)
 const error = ref('')
 const boot = ref<BootstrapResponse | null>(null)
 const backendEntrypoints = ref<EntryPoint[]>([])
+const customEntrypoints = ref<EntryPoint[]>([])
 const selectedIds = ref<string[]>([])
 const runStates = ref<Record<string, EndpointRunState>>({})
 const results = ref<EndpointResult[]>([])
 const reportId = ref('')
 const shareURL = ref('')
-const reportJSON = ref<unknown>(null)
+const reportJSON = ref<any | null>(null)
 const progress = ref('')
+const customName = ref('')
+const customURL = ref('')
+
 const adminReports = ref<any[]>([])
 const adminTotal = ref(0)
 const adminReportDetail = ref<any | null>(null)
 const adminInventory = ref<any | null>(null)
 const adminReportIdFilter = ref('')
 const adminUserFilter = ref('')
+const adminLevelFilter = ref('')
+const adminRawOpen = ref(false)
 
-const isReportPage = computed(() => window.location.pathname.includes('/report/'))
-const isAdminPage = computed(() => window.location.pathname.includes('/admin'))
+const pathName = window.location.pathname
+const viewMode: ViewMode = pathName.includes('/report/') ? 'report' : pathName.includes('/admin') ? 'admin' : 'customer'
+const isReportPage = computed(() => viewMode === 'report')
+const isAdminPage = computed(() => viewMode === 'admin')
 const token = computed(() => boot.value?.session_token || sessionStorage.getItem('sub2api_lg_session_token') || '')
 const adminToken = computed(() => boot.value?.session_token || sessionStorage.getItem('sub2api_lg_admin_session_token') || '')
-const entrypoints = computed(() => backendEntrypoints.value)
-const best = computed(() => [...results.value].sort((a, b) => b.browser.success_rate - a.browser.success_rate)[0])
+const entrypoints = computed(() => [...backendEntrypoints.value, ...customEntrypoints.value])
 const rows = computed(() => entrypoints.value.map((endpoint) => ({
   endpoint,
   selected: selectedIds.value.includes(endpoint.id),
@@ -62,12 +68,11 @@ const selectedEndpoints = computed(() => entrypoints.value.filter((endpoint) => 
 const selectedRows = computed(() => rows.value.filter((row) => row.selected))
 const sizeLabels = computed(() => normalizeSizes(boot.value?.probe.blob_sizes || ['64k', '1m', '5m', '20m']))
 const largestSize = computed(() => sizeLabels.value[sizeLabels.value.length - 1] || '20m')
+const best = computed(() => [...results.value].sort(compareResults)[0])
 const aggregate = computed(() => {
   const states = selectedIds.value.map((id) => endpointState(id)).filter((state) => state.samples.length > 0 || state.result)
   return {
     successRate: averageMetric(states.map((state) => state.metrics.successRate)),
-    endpointPingSuccessRate: averageMetric(states.map((state) => state.metrics.endpointPingSuccessRate)),
-    avgEndpointPing: averageMetric(states.map((state) => state.metrics.avgEndpointPing)),
     pingSuccessRate: averageMetric(states.map((state) => state.metrics.pingSuccessRate)),
     avgPing: averageMetric(states.map((state) => state.metrics.avgPing)),
     avgTTFB: averageMetric(states.map((state) => state.metrics.avgTTFB)),
@@ -77,7 +82,19 @@ const aggregate = computed(() => {
   }
 })
 
+const report = computed(() => reportJSON.value || {})
+const reportSummary = computed(() => report.value.summary || {})
+const reportEntrypoints = computed<any[]>(() => Array.isArray(report.value.entrypoints) ? report.value.entrypoints : [])
+const reportClientEnv = computed<Record<string, string>>(() => report.value.client_env || {})
+const reportSupportRef = computed(() => report.value.support_reference || {})
+const adminCustomerReport = computed(() => adminReportDetail.value?.customer_report || {})
+const adminInternalReport = computed(() => adminReportDetail.value?.internal_report || {})
+const adminOwnerSession = computed(() => adminReportDetail.value?.owner_session || {})
+const adminInternalEntrypoints = computed<any[]>(() => Array.isArray(adminInternalReport.value?.entrypoints) ? adminInternalReport.value.entrypoints : [])
+const adminDiagnosis = computed<any[]>(() => Array.isArray(adminInternalReport.value?.diagnosis) ? adminInternalReport.value.diagnosis : [])
+
 onMounted(async () => {
+  applyTheme(new URLSearchParams(window.location.search).get('theme') || '')
   try {
     if (isReportPage.value) {
       await loadReportPage()
@@ -88,7 +105,8 @@ onMounted(async () => {
       return
     }
     boot.value = await bootstrap()
-    backendEntrypoints.value = boot.value.entrypoints || []
+    applyTheme(boot.value.app?.theme || '')
+    backendEntrypoints.value = normalizeEntrypoints(boot.value.entrypoints || [])
     selectAllEndpoints()
   } catch (e) {
     error.value = String((e as Error)?.message || e)
@@ -101,7 +119,7 @@ async function loadLatestEntrypoints(preserveSelection: boolean) {
   if (!token.value) return
   const previous = new Set(selectedIds.value)
   const snapshot = await getEntrypoints(token.value)
-  backendEntrypoints.value = snapshot.entrypoints || []
+  backendEntrypoints.value = normalizeEntrypoints(snapshot.entrypoints || [])
   if (!preserveSelection || previous.size === 0) {
     selectAllEndpoints()
     return
@@ -121,20 +139,11 @@ async function run() {
     if (endpoints.length === 0) throw new Error('没有端点可测试')
     const runID = `run_${crypto.randomUUID()}`
     for (const endpoint of endpoints) {
-      setState(endpoint.id, {
-        ...blankState(),
-        status: 'idle',
-        current: '待开始',
-      })
+      setState(endpoint.id, { ...blankState(), status: 'idle', current: '待开始' })
     }
     for (const endpoint of endpoints) {
-      progress.value = endpoint.name
-      patchState(endpoint.id, (state) => ({
-        ...state,
-        status: 'running',
-        current: '准备测试',
-        logs: ['准备测试'],
-      }))
+      progress.value = displayName(endpoint)
+      patchState(endpoint.id, (state) => ({ ...state, status: 'running', current: '准备测试', logs: ['准备测试'] }))
       try {
         const result = await diagnoseEndpoint(endpoint, boot.value.probe, runID, (event) => recordProgress(event))
         results.value.push(result)
@@ -157,7 +166,7 @@ async function run() {
       }
     }
     if (results.value.length === 0) throw new Error('没有端点完成测试')
-    const payload = buildReport(runID, allSamples())
+    const payload = buildReport(runID, allSamples(), endpointLabels(), customEndpointPayload())
     const saved = await submitReport(token.value, payload)
     reportId.value = saved.report_id
     shareURL.value = saved.share_url
@@ -168,6 +177,28 @@ async function run() {
     progress.value = ''
     running.value = false
   }
+}
+
+function addCustomEndpoint() {
+  if (running.value) return
+  error.value = ''
+  try {
+    if (!boot.value) throw new Error('页面尚未初始化')
+    const endpoint = buildCustomEndpoint(customURL.value, customName.value, boot.value.app.public_path)
+    if (entrypoints.value.some((item) => item.id === endpoint.id)) throw new Error('该自定义端点已存在')
+    customEntrypoints.value = [...customEntrypoints.value, endpoint]
+    selectedIds.value = Array.from(new Set([...selectedIds.value, endpoint.id]))
+    customName.value = ''
+    customURL.value = ''
+  } catch (e) {
+    error.value = String((e as Error)?.message || e)
+  }
+}
+
+function removeCustomEndpoint(id: string) {
+  if (running.value) return
+  customEntrypoints.value = customEntrypoints.value.filter((endpoint) => endpoint.id !== id)
+  selectedIds.value = selectedIds.value.filter((item) => item !== id)
 }
 
 async function loadReportPage() {
@@ -183,6 +214,7 @@ async function loadReportPage() {
 
 async function loadAdminPage() {
   boot.value = await adminBootstrap()
+  applyTheme(boot.value.app?.theme || '')
   await Promise.all([refreshAdminReports(), loadAdminInventory()])
 }
 
@@ -191,6 +223,7 @@ async function refreshAdminReports() {
   const params: Record<string, string> = {}
   if (adminReportIdFilter.value.trim()) params.report_id = adminReportIdFilter.value.trim()
   if (adminUserFilter.value.trim()) params.user_id = adminUserFilter.value.trim()
+  if (adminLevelFilter.value.trim()) params.level = adminLevelFilter.value.trim()
   const body = await listAdminReports(adminToken.value, params)
   adminReports.value = body.items || []
   adminTotal.value = body.total || 0
@@ -199,6 +232,7 @@ async function refreshAdminReports() {
 async function openAdminReport(reportID: string) {
   if (!adminToken.value || !reportID) return
   adminReportDetail.value = await getAdminReport(adminToken.value, reportID)
+  adminRawOpen.value = false
 }
 
 async function loadAdminInventory() {
@@ -210,18 +244,74 @@ function notifyParent(summary: any) {
   const params = new URLSearchParams(window.location.search)
   const srcURL = params.get('src_url') || ''
   if (!srcURL) return
-  let parentOrigin = ''
   try {
-    parentOrigin = new URL(srcURL).origin
+    window.parent.postMessage({
+      type: 'sub2api-lg:customer-report-created',
+      report_id: reportId.value,
+      score: summary?.score,
+      level: summary?.level,
+    }, new URL(srcURL).origin)
   } catch {
-    return
+    // Parent notification is optional.
   }
-  window.parent.postMessage({
-    type: 'sub2api-lg:completed',
-    report_id: reportId.value,
-    score: summary?.score,
-    level: summary?.level,
-  }, parentOrigin)
+}
+
+function normalizeEntrypoints(items: EntryPoint[]): EntryPoint[] {
+  return items.map((item) => ({
+    ...item,
+    id: item.endpoint_public_id || item.id,
+    name: item.display_name || item.name,
+    description: item.description || '系统入口',
+  }))
+}
+
+function buildCustomEndpoint(rawURL: string, rawName: string, publicPath: string): EntryPoint {
+  const raw = rawURL.trim()
+  if (!raw) throw new Error('请输入自定义端点地址')
+  const input = raw.includes('://') ? raw : `https://${raw}`
+  const parsed = new URL(input)
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') throw new Error('自定义端点只支持 http 或 https')
+  parsed.search = ''
+  parsed.hash = ''
+  const cleanPublicPath = publicPath.startsWith('/') ? publicPath : `/${publicPath}`
+  const path = parsed.pathname.replace(/\/+$/, '')
+  if (path === '' || path === '/') {
+    parsed.pathname = cleanPublicPath
+  } else if (!path.endsWith(cleanPublicPath)) {
+    parsed.pathname = `${path}${cleanPublicPath}`.replace(/\/+/g, '/')
+  }
+  const probeBaseURL = parsed.toString().replace(/\/+$/, '')
+  const id = `custom_${stableHash(probeBaseURL)}`
+  const name = safeCustomName(rawName) || `自定义入口 ${customEntrypoints.value.length + 1}`
+  return {
+    id,
+    endpoint_public_id: id,
+    name,
+    display_name: name,
+    description: '自定义入口 · 仅本次浏览器测试',
+    probe_base_url: probeBaseURL,
+    source: 'custom',
+    capabilities: ['ping', 'blob', 'upload', 'stream'],
+  }
+}
+
+function endpointLabels(): Record<string, string> {
+  const labels: Record<string, string> = {}
+  for (const endpoint of entrypoints.value) {
+    labels[endpoint.endpoint_public_id || endpoint.id] = displayName(endpoint)
+  }
+  return labels
+}
+
+function customEndpointPayload() {
+  const selected = new Set(selectedIds.value)
+  return customEntrypoints.value
+    .filter((endpoint) => selected.has(endpoint.id))
+    .map((endpoint) => ({
+      endpoint_public_id: endpoint.endpoint_public_id || endpoint.id,
+      display_name: displayName(endpoint),
+      probe_base_url: endpoint.probe_base_url || '',
+    }))
 }
 
 function allSamples(): DiagnoseProgressEvent[] {
@@ -258,20 +348,12 @@ function endpointState(id: string): EndpointRunState {
 }
 
 function blankState(): EndpointRunState {
-  return {
-    status: 'idle',
-    current: '待开始',
-    logs: [],
-    samples: [],
-    metrics: emptyMetrics(),
-  }
+  return { status: 'idle', current: '待开始', logs: [], samples: [], metrics: emptyMetrics() }
 }
 
 function emptyMetrics(): LiveMetrics {
   return {
     successRate: null,
-    endpointPingSuccessRate: null,
-    avgEndpointPing: null,
     pingSuccessRate: null,
     avgPing: null,
     avgTTFB: null,
@@ -300,24 +382,20 @@ function recordProgress(event: DiagnoseProgressEvent) {
       current: `${event.label} (${event.sample_index}/${event.sample_total})`,
       samples,
       metrics: summarizeSamples(samples),
-      logs: [`${event.label} ${status}${latency}${speed}`, ...state.logs].slice(0, 8),
+      logs: [`${event.label} ${status}${latency}${speed}`, ...state.logs].slice(0, 7),
     }
   })
 }
 
 function summarizeSamples(samples: DiagnoseProgressEvent[]): LiveMetrics {
-  const originPing = samples.filter((sample) => sample.kind === 'origin_ping' && sample.ok)
-  const originPingTotal = samples.filter((sample) => sample.kind === 'origin_ping')
-  const completeSamples = samples
-  const ttfb = completeSamples.filter((sample) => sample.ttfb_ms != null && sample.ok).map((sample) => sample.ttfb_ms as number)
+  const ping = samples.filter((sample) => sample.kind === 'origin_ping')
+  const pingOK = ping.filter((sample) => sample.ok)
+  const ttfb = samples.filter((sample) => sample.ttfb_ms != null && sample.ok).map((sample) => sample.ttfb_ms as number)
   const ttft = samples.filter((sample) => sample.ttft_ms != null && sample.ok).map((sample) => sample.ttft_ms as number)
-  const successRate = completeSamples.length > 0 ? completeSamples.filter((sample) => sample.ok).length / completeSamples.length : null
   return {
-    successRate,
-    endpointPingSuccessRate: null,
-    avgEndpointPing: averageMetric(originPing.map((sample) => sample.endpoint_ms ?? null)),
-    pingSuccessRate: originPingTotal.length > 0 ? originPing.length / originPingTotal.length : null,
-    avgPing: averageMetric(originPing.map((sample) => sample.duration_ms ?? null)),
+    successRate: samples.length > 0 ? samples.filter((sample) => sample.ok).length / samples.length : null,
+    pingSuccessRate: ping.length > 0 ? pingOK.length / ping.length : null,
+    avgPing: averageMetric(pingOK.map((sample) => sample.duration_ms ?? null)),
     avgTTFB: averageMetric(ttfb),
     avgTTFT: averageMetric(ttft),
     downloadBySize: speedsByKind(samples, 'download'),
@@ -328,8 +406,6 @@ function summarizeSamples(samples: DiagnoseProgressEvent[]): LiveMetrics {
 function metricsFromResult(result: EndpointResult): LiveMetrics {
   return {
     successRate: result.browser.success_rate,
-    endpointPingSuccessRate: null,
-    avgEndpointPing: result.browser.avg_origin_ping_ms ?? null,
     pingSuccessRate: result.browser.ping_success_rate ?? result.browser.success_rate,
     avgPing: result.browser.avg_ping_ms,
     avgTTFB: result.browser.avg_ttfb_ms,
@@ -341,25 +417,18 @@ function metricsFromResult(result: EndpointResult): LiveMetrics {
 
 function speedsByKind(samples: DiagnoseProgressEvent[], kind: 'download' | 'upload'): Record<string, number | null> {
   const out: Record<string, number | null> = {}
-  for (const size of sizeLabels.value) {
-    out[size] = speedByKind(samples, kind, size)
-  }
+  for (const size of sizeLabels.value) out[size] = speedByKind(samples, kind, size)
   return out
 }
 
 function speedByKind(samples: DiagnoseProgressEvent[], kind: 'download' | 'upload', size: string): number | null {
-  const values = samples
-    .filter((sample) => sample.kind === kind && sample.size === size && sample.mbps != null && sample.ok)
-    .map((sample) => sample.mbps as number)
+  const values = samples.filter((sample) => sample.kind === kind && sample.size === size && sample.mbps != null && sample.ok).map((sample) => sample.mbps as number)
   return averageMetric(values)
 }
 
 function legacySizeMap(small: number | null, large: number | null): Record<string, number | null> {
   const sizes = sizeLabels.value
-  return {
-    [sizes[0] || '64k']: small,
-    [sizes[sizes.length - 1] || '20m']: large,
-  }
+  return { [sizes[0] || '64k']: small, [sizes[sizes.length - 1] || '20m']: large }
 }
 
 function metricBySize(values: Record<string, number | null>, size: string): number | null {
@@ -370,6 +439,38 @@ function averageMetric(values: Array<number | null | undefined>): number | null 
   const ok = values.filter((value): value is number => value != null && Number.isFinite(value))
   if (ok.length === 0) return null
   return Number((ok.reduce((sum, item) => sum + item, 0) / ok.length).toFixed(2))
+}
+
+function compareResults(a: EndpointResult, b: EndpointResult): number {
+  return b.browser.success_rate - a.browser.success_rate ||
+    a.browser.http_loss_rate - b.browser.http_loss_rate ||
+    (a.browser.p95_ttfb_ms ?? Infinity) - (b.browser.p95_ttfb_ms ?? Infinity) ||
+    (a.browser.p95_duration_ms ?? Infinity) - (b.browser.p95_duration_ms ?? Infinity)
+}
+
+function displayName(endpoint: EntryPoint): string {
+  return endpoint.display_name || endpoint.name || endpoint.id
+}
+
+function statusText(status: RunStatus) {
+  if (status === 'running') return '测试中'
+  if (status === 'done') return '完成'
+  if (status === 'failed') return '失败'
+  return '待开始'
+}
+
+function levelText(level: string | undefined) {
+  if (level === 'good') return '正常'
+  if (level === 'warning') return '波动'
+  if (level === 'bad') return '异常'
+  return level || '-'
+}
+
+function formatDate(value: string | number | Date | undefined) {
+  if (!value) return '-'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return String(value)
+  return date.toLocaleString()
 }
 
 function formatMs(value: number | null | undefined) {
@@ -384,229 +485,330 @@ function pct(value: number | null | undefined) {
   return value == null ? '-' : `${Math.round(value * 100)}%`
 }
 
-function statusText(status: RunStatus) {
-  if (status === 'running') return '测试中'
-  if (status === 'done') return '完成'
-  if (status === 'failed') return '失败'
-  return '待开始'
-}
-
 function normalizeSizes(sizes: string[]): string[] {
   const out = Array.from(new Set(sizes.map((item) => item.trim().toLowerCase()).filter(Boolean)))
   return out.length > 0 ? out : ['64k', '1m', '5m', '20m']
 }
 
+function safeCustomName(value: string): string {
+  const trimmed = value.trim()
+  if (!trimmed || trimmed.includes('://')) return ''
+  return trimmed.slice(0, 32)
+}
+
+function stableHash(value: string): string {
+  let hash = 0
+  for (let i = 0; i < value.length; i += 1) hash = ((hash << 5) - hash + value.charCodeAt(i)) | 0
+  return Math.abs(hash).toString(36)
+}
+
+function applyTheme(theme: string) {
+  const normalized = theme.toLowerCase()
+  if (normalized === 'dark' || normalized === 'light') {
+    document.documentElement.dataset.theme = normalized
+  }
+}
 </script>
 
 <template>
-  <main class="page">
+  <main class="page" :class="`view-${viewMode}`">
     <section v-if="loading" class="state">加载中</section>
+
     <section v-else-if="isReportPage" class="stack">
-      <header class="toolbar">
+      <header class="hero compact">
         <div>
-          <h1>诊断报告</h1>
-          <p>报告 JSON</p>
+          <span class="eyebrow">Customer report</span>
+          <h1>诊断报告 {{ reportSupportRef.short_code || report.report_id || '' }}</h1>
+          <p>{{ reportSummary.main_message || '客户可见的脱敏诊断结果' }}</p>
+        </div>
+        <div :class="['score-ring', reportSummary.level]">
+          <strong>{{ reportSummary.score ?? '-' }}</strong>
+          <span>{{ levelText(reportSummary.level) }}</span>
         </div>
       </header>
-      <pre class="json">{{ JSON.stringify(reportJSON, null, 2) }}</pre>
+
+      <section class="summary">
+        <div>
+          <span class="label">推荐入口</span>
+          <strong>{{ reportSummary.best_endpoint_name || '-' }}</strong>
+        </div>
+        <div>
+          <span class="label">报告编号</span>
+          <strong>{{ report.report_id || reportSupportRef.report_id || '-' }}</strong>
+        </div>
+        <div>
+          <span class="label">生成时间</span>
+          <strong>{{ formatDate(report.created_at) }}</strong>
+        </div>
+        <div>
+          <span class="label">语言/时区</span>
+          <strong>{{ reportClientEnv.language || '-' }} / {{ reportClientEnv.timezone || '-' }}</strong>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>建议动作</h2>
+          <span>{{ reportSummary.recommendations?.length || 0 }} 条</span>
+        </div>
+        <div class="recommendations">
+          <span v-for="item in reportSummary.recommendations || []" :key="item">{{ item }}</span>
+          <span v-if="!reportSummary.recommendations?.length">暂无额外建议</span>
+        </div>
+      </section>
+
+      <section class="endpoint-results">
+        <article v-for="ep in reportEntrypoints" :key="ep.endpoint_public_id" class="result-card">
+          <header>
+            <div>
+              <h2>{{ ep.display_name }}</h2>
+              <p>{{ ep.endpoint_public_id }}</p>
+            </div>
+            <span :class="['badge', ep.level]">{{ levelText(ep.level) }}</span>
+          </header>
+          <div class="metric-grid">
+            <div><span class="label">成功率</span><strong>{{ pct(ep.success_rate) }}</strong></div>
+            <div><span class="label">HTTP 失败率</span><strong>{{ pct(ep.http_loss_rate) }}</strong></div>
+            <div><span class="label">超时率</span><strong>{{ pct(ep.timeout_rate) }}</strong></div>
+            <div><span class="label">p50 / p95</span><strong>{{ formatMs(ep.latency_p50_ms) }} / {{ formatMs(ep.latency_p95_ms) }}</strong></div>
+            <div><span class="label">TTFB p95</span><strong>{{ formatMs(ep.ttfb_p95_ms) }}</strong></div>
+            <div><span class="label">下载 / 上传</span><strong>{{ formatMbps(ep.download_mbps) }} / {{ formatMbps(ep.upload_mbps) }}</strong></div>
+            <div><span class="label">流式首事件</span><strong>{{ formatMs(ep.stream_first_event_ms) }}</strong></div>
+            <div><span class="label">CORS / Timing</span><strong>{{ ep.cors_ok ? '正常' : '异常' }} / {{ ep.timing_detail_available ? '可用' : '不可用' }}</strong></div>
+          </div>
+        </article>
+      </section>
       <p v-if="error" class="error">{{ error }}</p>
     </section>
+
     <section v-else-if="isAdminPage" class="stack">
-      <header class="toolbar">
+      <header class="hero compact">
         <div>
+          <span class="eyebrow">Admin console</span>
           <h1>管理员排障</h1>
-          <p>{{ adminTotal }} 份报告 · {{ adminInventory?.valid_count ?? 0 }} 个有效入口</p>
+          <p>{{ adminTotal }} 份报告 · {{ adminInventory?.valid_count ?? 0 }} 个有效入口 · 内部信息仅管理员可见</p>
         </div>
-        <div class="actions">
-          <button @click="refreshAdminReports">刷新</button>
-        </div>
+        <button class="primary" @click="refreshAdminReports">刷新</button>
       </header>
+
       <form class="filter-bar" @submit.prevent="refreshAdminReports">
         <input v-model="adminReportIdFilter" placeholder="报告 ID">
         <input v-model="adminUserFilter" placeholder="用户 ID">
+        <select v-model="adminLevelFilter">
+          <option value="">全部等级</option>
+          <option value="good">正常</option>
+          <option value="warning">波动</option>
+          <option value="bad">异常</option>
+          <option value="legacy">历史</option>
+        </select>
         <button class="primary" type="submit">查询</button>
       </form>
       <p v-if="error" class="error">{{ error }}</p>
-      <section class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>报告</th>
-              <th>时间</th>
-              <th>用户</th>
-              <th>等级</th>
-              <th>分数</th>
-              <th>推荐入口</th>
-              <th>问题代码</th>
-              <th>操作</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="item in adminReports" :key="item.report_id">
-              <td>{{ item.report_id }}</td>
-              <td>{{ item.created_at }}</td>
-              <td>{{ item.user_id || '-' }}</td>
-              <td><span :class="['badge', item.level]">{{ item.level }}</span></td>
-              <td>{{ item.score }}</td>
-              <td>{{ item.best_endpoint_name || '-' }}</td>
-              <td>{{ (item.problem_codes || []).join(', ') || '-' }}</td>
-              <td><button @click="openAdminReport(item.report_id)">查看</button></td>
-            </tr>
-          </tbody>
-        </table>
-      </section>
-      <section v-if="adminReportDetail" class="selector-panel">
-        <div class="panel-head">
-          <h2>报告详情</h2>
-          <span>{{ adminReportDetail.report_id }}</span>
+
+      <section class="admin-layout">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>报告</th>
+                <th>时间</th>
+                <th>用户</th>
+                <th>等级</th>
+                <th>分数</th>
+                <th>推荐入口</th>
+                <th>问题代码</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="item in adminReports" :key="item.report_id">
+                <td class="mono">{{ item.report_id }}</td>
+                <td>{{ formatDate(item.created_at) }}</td>
+                <td class="mono">{{ item.user_id || '-' }}</td>
+                <td><span :class="['badge', item.level]">{{ levelText(item.level) }}</span></td>
+                <td>{{ item.score }}</td>
+                <td>{{ item.best_endpoint_name || '-' }}</td>
+                <td>{{ (item.problem_codes || []).join(', ') || '-' }}</td>
+                <td><button @click="openAdminReport(item.report_id)">查看</button></td>
+              </tr>
+            </tbody>
+          </table>
         </div>
-        <pre class="json">{{ JSON.stringify(adminReportDetail, null, 2) }}</pre>
+
+        <aside class="panel inventory-panel">
+          <div class="panel-head">
+            <h2>入口 Inventory</h2>
+            <span>{{ adminInventory?.source || '-' }}</span>
+          </div>
+          <div class="kv-grid">
+            <div><span>public_path</span><strong>{{ adminInventory?.public_path || '-' }}</strong></div>
+            <div><span>有效入口</span><strong>{{ adminInventory?.valid_count ?? '-' }}</strong></div>
+            <div><span>过滤入口</span><strong>{{ adminInventory?.filtered_count ?? '-' }}</strong></div>
+          </div>
+        </aside>
       </section>
-      <section v-if="adminInventory" class="selector-panel">
-        <div class="panel-head">
-          <h2>入口 Inventory</h2>
-          <span>{{ adminInventory.source || '-' }}</span>
+
+      <section v-if="adminReportDetail" class="admin-detail">
+        <div class="panel">
+          <div class="panel-head">
+            <h2>客户视图摘要</h2>
+            <span>{{ adminReportDetail.report_id }}</span>
+          </div>
+          <div class="summary">
+            <div><span class="label">等级/分数</span><strong>{{ levelText(adminCustomerReport.summary?.level) }} / {{ adminCustomerReport.summary?.score ?? '-' }}</strong></div>
+            <div><span class="label">推荐入口</span><strong>{{ adminCustomerReport.summary?.best_endpoint_name || '-' }}</strong></div>
+            <div><span class="label">报告时间</span><strong>{{ formatDate(adminCustomerReport.created_at) }}</strong></div>
+            <div><span class="label">分享状态</span><strong>{{ adminReportDetail.customer_share_enabled ? '开启' : '关闭' }}</strong></div>
+          </div>
         </div>
-        <pre class="json">{{ JSON.stringify(adminInventory, null, 2) }}</pre>
+
+        <div class="panel">
+          <div class="panel-head">
+            <h2>原始用户上下文</h2>
+            <span>admin only</span>
+          </div>
+          <div class="kv-grid">
+            <div><span>user_id</span><strong>{{ adminOwnerSession.user_id || adminInternalReport.owner_user_id || '-' }}</strong></div>
+            <div><span>username</span><strong>{{ adminOwnerSession.username || '-' }}</strong></div>
+            <div><span>session</span><strong class="mono">{{ adminOwnerSession.session_id || '-' }}</strong></div>
+            <div><span>src_host</span><strong>{{ adminOwnerSession.src_host || '-' }}</strong></div>
+            <div><span>src_url</span><strong>{{ adminOwnerSession.src_url || '-' }}</strong></div>
+            <div><span>theme/lang</span><strong>{{ adminOwnerSession.theme || '-' }} / {{ adminOwnerSession.lang || '-' }}</strong></div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <h2>内部入口明细</h2>
+            <span>{{ adminInternalEntrypoints.length }} 个</span>
+          </div>
+          <div class="endpoint-results">
+            <article v-for="ep in adminInternalEntrypoints" :key="ep.endpoint_public_id" class="result-card internal">
+              <header>
+                <div>
+                  <h2>{{ ep.name }}</h2>
+                  <p class="mono">{{ ep.endpoint_public_id }}</p>
+                </div>
+                <span class="badge">{{ ep.source || '-' }}</span>
+              </header>
+              <div class="kv-grid">
+                <div><span>base_url</span><strong>{{ ep.base_url || '-' }}</strong></div>
+                <div><span>lg_base_url</span><strong>{{ ep.lg_base_url || '-' }}</strong></div>
+                <div><span>diag refs</span><strong>{{ (ep.diag_event_refs || []).join(', ') || '-' }}</strong></div>
+                <div><span>score</span><strong>{{ ep.browser_metrics?.score ?? '-' }}</strong></div>
+              </div>
+            </article>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <h2>诊断结论</h2>
+            <span>{{ adminDiagnosis.length }} 条</span>
+          </div>
+          <div class="diagnosis-list">
+            <div v-for="item in adminDiagnosis" :key="item.code">
+              <strong>{{ item.code }}</strong>
+              <span>{{ item.severity }} · {{ item.operator_hint }}</span>
+            </div>
+            <div v-if="adminDiagnosis.length === 0"><strong>无</strong><span>没有内部诊断结论</span></div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <h2>Raw JSON</h2>
+            <button @click="adminRawOpen = !adminRawOpen">{{ adminRawOpen ? '隐藏' : '查看' }}</button>
+          </div>
+          <pre v-if="adminRawOpen" class="json">{{ JSON.stringify(adminReportDetail, null, 2) }}</pre>
+        </div>
       </section>
     </section>
+
     <section v-else class="stack">
-      <header class="toolbar">
+      <header class="hero">
         <div>
+          <span class="eyebrow">Looking glass</span>
           <h1>入口访问诊断</h1>
           <p>{{ entrypoints.length }} 个入口 · 已选 {{ selectedEndpoints.length }} 个 · {{ boot?.entrypoint_source || '未获取' }}</p>
         </div>
         <div class="actions">
           <button :disabled="running" @click="selectAllEndpoints">全选</button>
           <button :disabled="running" @click="clearSelection">清空</button>
-          <button class="primary" :disabled="running || selectedEndpoints.length === 0" @click="run">
-            {{ running ? '测试中' : '开始测试' }}
-          </button>
+          <button class="primary" :disabled="running || selectedEndpoints.length === 0" @click="run">{{ running ? '测试中' : '开始诊断' }}</button>
         </div>
       </header>
+
+      <section class="panel custom-panel">
+        <div class="panel-head">
+          <h2>自定义端点</h2>
+          <span>仅本次浏览器测试，不进入客户报告 URL</span>
+        </div>
+        <form class="custom-form" @submit.prevent="addCustomEndpoint">
+          <input v-model="customName" :disabled="running" placeholder="显示名称，可选">
+          <input v-model="customURL" :disabled="running" placeholder="https://example.com 或 https://example.com/lg">
+          <button :disabled="running" type="submit">添加</button>
+        </form>
+      </section>
 
       <div v-if="running" class="progress">正在测试：{{ progress }}</div>
       <div v-else-if="results.length === 0" class="state">待开始</div>
       <p v-if="error" class="error">{{ error }}</p>
 
       <section class="summary">
-        <div>
-          <span class="label">完整测试成功率</span>
-          <strong>{{ pct(aggregate.successRate) }}</strong>
-        </div>
-        <div>
-          <span class="label">诊断接口成功率</span>
-          <strong>{{ pct(aggregate.pingSuccessRate) }}</strong>
-        </div>
-        <div>
-          <span class="label">诊断接口延迟</span>
-          <strong>{{ formatMs(aggregate.avgPing) }}</strong>
-        </div>
-        <div>
-          <span class="label">平均 TTFB</span>
-          <strong>{{ formatMs(aggregate.avgTTFB) }}</strong>
-        </div>
-        <div>
-          <span class="label">平均 TTFT</span>
-          <strong>{{ formatMs(aggregate.avgTTFT) }}</strong>
-        </div>
-        <div>
-          <span class="label">最大包下载 {{ largestSize }}</span>
-          <strong>{{ formatMbps(aggregate.download) }}</strong>
-        </div>
-        <div>
-          <span class="label">最大包上传 {{ largestSize }}</span>
-          <strong>{{ formatMbps(aggregate.upload) }}</strong>
-        </div>
+        <div><span class="label">完整测试成功率</span><strong>{{ pct(aggregate.successRate) }}</strong></div>
+        <div><span class="label">诊断接口成功率</span><strong>{{ pct(aggregate.pingSuccessRate) }}</strong></div>
+        <div><span class="label">诊断接口延迟</span><strong>{{ formatMs(aggregate.avgPing) }}</strong></div>
+        <div><span class="label">平均 TTFB</span><strong>{{ formatMs(aggregate.avgTTFB) }}</strong></div>
+        <div><span class="label">平均 TTFT</span><strong>{{ formatMs(aggregate.avgTTFT) }}</strong></div>
+        <div><span class="label">最大包下载 {{ largestSize }}</span><strong>{{ formatMbps(aggregate.download) }}</strong></div>
+        <div><span class="label">最大包上传 {{ largestSize }}</span><strong>{{ formatMbps(aggregate.upload) }}</strong></div>
       </section>
 
-      <section class="selector-panel">
+      <section class="panel">
         <div class="panel-head">
           <h2>选择端点</h2>
           <span>{{ selectedEndpoints.length }}/{{ entrypoints.length }}</span>
         </div>
         <div class="endpoint-grid">
-          <label
-            v-for="row in rows"
-            :key="row.endpoint.id"
-            :class="['endpoint-option', { selected: row.selected }]"
-          >
-            <input
-              type="checkbox"
-              :checked="row.selected"
-              :disabled="running"
-              @change="toggleEndpoint(row.endpoint.id, $event)"
-            >
+          <label v-for="row in rows" :key="row.endpoint.id" :class="['endpoint-option', { selected: row.selected }]">
+            <input type="checkbox" :checked="row.selected" :disabled="running" @change="toggleEndpoint(row.endpoint.id, $event)">
             <span class="endpoint-main">
-              <strong>{{ row.endpoint.name }}</strong>
+              <strong>{{ displayName(row.endpoint) }}</strong>
               <span>{{ row.endpoint.description || '浏览器诊断入口' }}</span>
             </span>
             <span :class="['run-status', row.state.status]">{{ statusText(row.state.status) }}</span>
+            <button v-if="row.endpoint.source === 'custom'" class="ghost small" :disabled="running" type="button" @click.prevent.stop="removeCustomEndpoint(row.endpoint.id)">移除</button>
           </label>
         </div>
       </section>
 
       <section v-if="best" class="summary">
-        <div>
-          <span class="label">推荐入口</span>
-          <strong>{{ best.name }}</strong>
-        </div>
-        <div>
-          <span class="label">成功率</span>
-          <strong>{{ Math.round(best.browser.success_rate * 100) }}%</strong>
-        </div>
-        <div>
-          <span class="label">p95 总耗时</span>
-          <strong>{{ best.browser.p95_duration_ms ?? '-' }} ms</strong>
-        </div>
-        <div>
-          <span class="label">p95 首包</span>
-          <strong>{{ best.browser.p95_ttfb_ms ?? '-' }} ms</strong>
-        </div>
+        <div><span class="label">推荐入口</span><strong>{{ best.name }}</strong></div>
+        <div><span class="label">成功率</span><strong>{{ pct(best.browser.success_rate) }}</strong></div>
+        <div><span class="label">p95 总耗时</span><strong>{{ formatMs(best.browser.p95_duration_ms) }}</strong></div>
+        <div><span class="label">p95 首包</span><strong>{{ formatMs(best.browser.p95_ttfb_ms) }}</strong></div>
       </section>
 
       <section class="live-grid">
         <article v-for="row in selectedRows" :key="row.endpoint.id" class="live-card">
           <header class="card-head">
             <div>
-              <h2>{{ row.endpoint.name }}</h2>
+              <h2>{{ displayName(row.endpoint) }}</h2>
               <p>{{ row.endpoint.description || '浏览器诊断入口' }}</p>
             </div>
             <span :class="['run-status', row.state.status]">{{ statusText(row.state.status) }}</span>
           </header>
           <div class="current-line">{{ row.state.current }}</div>
-          <div class="meter">
-            <span :style="{ width: `${row.state.samples.length ? Math.round(row.state.samples.length / (row.state.samples[0]?.sample_total || 1) * 100) : 0}%` }"></span>
-          </div>
+          <div class="meter"><span :style="{ width: `${row.state.samples.length ? Math.round(row.state.samples.length / (row.state.samples[0]?.sample_total || 1) * 100) : 0}%` }"></span></div>
           <div class="metric-grid">
-            <div>
-              <span class="label">完整测试成功率</span>
-              <strong>{{ pct(row.state.metrics.successRate) }}</strong>
-            </div>
-            <div>
-              <span class="label">诊断接口成功率</span>
-              <strong>{{ pct(row.state.metrics.pingSuccessRate) }}</strong>
-            </div>
-            <div>
-              <span class="label">诊断接口延迟</span>
-              <strong>{{ formatMs(row.state.metrics.avgPing) }}</strong>
-            </div>
-            <div>
-              <span class="label">TTFB 平均</span>
-              <strong>{{ formatMs(row.state.metrics.avgTTFB) }}</strong>
-            </div>
-            <div>
-              <span class="label">TTFT 平均</span>
-              <strong>{{ formatMs(row.state.metrics.avgTTFT) }}</strong>
-            </div>
-            <div v-for="size in sizeLabels" :key="`${row.endpoint.id}-download-${size}`">
-              <span class="label">下载 {{ size }}</span>
-              <strong>{{ formatMbps(metricBySize(row.state.metrics.downloadBySize, size)) }}</strong>
-            </div>
-            <div v-for="size in sizeLabels" :key="`${row.endpoint.id}-upload-${size}`">
-              <span class="label">上传 {{ size }}</span>
-              <strong>{{ formatMbps(metricBySize(row.state.metrics.uploadBySize, size)) }}</strong>
-            </div>
+            <div><span class="label">完整成功率</span><strong>{{ pct(row.state.metrics.successRate) }}</strong></div>
+            <div><span class="label">Ping 成功率</span><strong>{{ pct(row.state.metrics.pingSuccessRate) }}</strong></div>
+            <div><span class="label">Ping 延迟</span><strong>{{ formatMs(row.state.metrics.avgPing) }}</strong></div>
+            <div><span class="label">TTFB</span><strong>{{ formatMs(row.state.metrics.avgTTFB) }}</strong></div>
+            <div><span class="label">TTFT</span><strong>{{ formatMs(row.state.metrics.avgTTFT) }}</strong></div>
+            <div v-for="size in sizeLabels" :key="`${row.endpoint.id}-download-${size}`"><span class="label">下载 {{ size }}</span><strong>{{ formatMbps(metricBySize(row.state.metrics.downloadBySize, size)) }}</strong></div>
+            <div v-for="size in sizeLabels" :key="`${row.endpoint.id}-upload-${size}`"><span class="label">上传 {{ size }}</span><strong>{{ formatMbps(metricBySize(row.state.metrics.uploadBySize, size)) }}</strong></div>
           </div>
           <ol class="log-list">
             <li v-for="item in row.state.logs" :key="item">{{ item }}</li>

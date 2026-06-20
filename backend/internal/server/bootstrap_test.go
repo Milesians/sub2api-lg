@@ -178,7 +178,7 @@ func TestBuildReportsKeepsURLsOutOfCustomerReport(t *testing.T) {
 			TimingDetailAvailable: true,
 		}},
 	}
-	customerReport, internalReport, _, _ := buildReports("rpt_1", session, req, snapshot, now)
+	customerReport, internalReport, _, _ := buildReports("rpt_1", session, req, snapshot, nil, now)
 	customerJSON, err := json.Marshal(customerReport)
 	if err != nil {
 		t.Fatal(err)
@@ -195,6 +195,71 @@ func TestBuildReportsKeepsURLsOutOfCustomerReport(t *testing.T) {
 	}
 	if !strings.Contains(string(internalJSON), "https://api.example.com/lg") {
 		t.Fatalf("internal_report should keep lg_base_url: %s", string(internalJSON))
+	}
+}
+
+func TestBuildReportsKeepsCustomEndpointURLAdminOnly(t *testing.T) {
+	now := time.Now()
+	session := &store.Session{ID: "sess_1", UserID: "user_1"}
+	req := customerReportRequest{
+		RunID:          "run_1",
+		EndpointLabels: map[string]string{"custom_abc": "自定义入口"},
+		Samples: []customerSample{{
+			EndpointPublicID:      "custom_abc",
+			Kind:                  "origin_ping",
+			RequestID:             "req_1",
+			OK:                    true,
+			DurationMS:            floatPtr(90),
+			TTFBMS:                floatPtr(40),
+			TimingDetailAvailable: true,
+		}},
+	}
+	customEntrypoints := []entrypoints.EntryPoint{{
+		ID:        "custom_abc",
+		Name:      "自定义入口",
+		BaseURL:   "https://custom.example.com",
+		LGBaseURL: "https://custom.example.com/lg",
+		Source:    "customer_custom",
+	}}
+
+	customerReport, internalReport, _, _ := buildReports("rpt_1", session, req, nil, customEntrypoints, now)
+	customerJSON, err := json.Marshal(customerReport)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(customerJSON), "custom.example.com") {
+		t.Fatalf("customer_report should hide custom endpoint URL: %s", string(customerJSON))
+	}
+	internalJSON, err := json.Marshal(internalReport)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(internalJSON), "https://custom.example.com/lg") {
+		t.Fatalf("internal_report should keep custom lg_base_url: %s", string(internalJSON))
+	}
+}
+
+func TestCustomerCustomEntrypointsNormalizeAndFilter(t *testing.T) {
+	cfg := config.Default()
+	cfg.App.PublicPath = "/lg"
+	if err := cfg.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	server := &Server{cfg: cfg}
+
+	items := server.customerCustomEntrypoints([]customerCustomEndpoint{
+		{EndpointPublicID: "custom_ok", DisplayName: "Edge A", ProbeBaseURL: "https://custom.example.com/base"},
+		{EndpointPublicID: "custom_private", DisplayName: "Local", ProbeBaseURL: "https://127.0.0.1/lg"},
+		{EndpointPublicID: "not_custom", DisplayName: "Bad ID", ProbeBaseURL: "https://bad.example.com/lg"},
+	})
+	if len(items) != 1 {
+		t.Fatalf("custom endpoints = %d, want 1: %#v", len(items), items)
+	}
+	if items[0].LGBaseURL != "https://custom.example.com/base/lg" {
+		t.Fatalf("lg_base_url = %q", items[0].LGBaseURL)
+	}
+	if items[0].BaseURL != "https://custom.example.com/base" {
+		t.Fatalf("base_url = %q", items[0].BaseURL)
 	}
 }
 
