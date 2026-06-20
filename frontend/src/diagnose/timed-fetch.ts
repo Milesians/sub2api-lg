@@ -7,6 +7,7 @@ export interface TimedFetchResult {
   error_kind?: 'timeout' | 'network_error' | 'http_status'
   error_message?: string
   timing_detail_available?: boolean
+  json?: any
   ttfb_ms?: number | null
   endpoint_ms?: number | null
   dns_ms?: number | null
@@ -22,6 +23,7 @@ export interface TimedFetchOptions {
   mode?: RequestMode
   okOnHTTPResponse?: boolean
   readBody?: boolean
+  parseJSON?: boolean
 }
 
 export async function timedFetch(url: string, timeoutMs: number, options: TimedFetchOptions = {}): Promise<TimedFetchResult> {
@@ -40,7 +42,7 @@ export async function timedFetch(url: string, timeoutMs: number, options: TimedF
       signal: controller.signal,
     })
     const firstHeadersAt = performance.now()
-    const body = options.readBody === false ? undefined : await res.arrayBuffer()
+    const body = options.readBody === false ? undefined : options.parseJSON ? await res.text() : await res.arrayBuffer()
     const ended = performance.now()
     const timing = getResourceTiming(url)
     const ok = options.okOnHTTPResponse || res.ok
@@ -49,9 +51,10 @@ export async function timedFetch(url: string, timeoutMs: number, options: TimedF
       status: res.status,
       duration_ms: Math.round(ended - started),
       header_ms: Math.round(firstHeadersAt - started),
-      response_bytes: body?.byteLength,
+      response_bytes: typeof body === 'string' ? new Blob([body]).size : body?.byteLength,
       error_kind: ok ? undefined : 'http_status',
       timing_detail_available: Boolean(timing?.detail_available),
+      json: options.parseJSON && typeof body === 'string' ? parseJSON(body) : undefined,
       ttfb_ms: timing?.detail_available ? Math.round(timing.ttfb_ms) : Math.round(firstHeadersAt - started),
       endpoint_ms: timing?.endpoint_ms ?? null,
       dns_ms: timing?.dns_ms ?? null,
@@ -70,6 +73,14 @@ export async function timedFetch(url: string, timeoutMs: number, options: TimedF
     }
   } finally {
     window.clearTimeout(timer)
+  }
+}
+
+function parseJSON(value: string): any {
+  try {
+    return JSON.parse(value)
+  } catch {
+    return undefined
   }
 }
 

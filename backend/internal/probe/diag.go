@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"sub2api-origin-lg/backend/internal/config"
+	"sub2api-origin-lg/backend/internal/netinfo"
 )
 
 type DiagHandlers struct {
@@ -235,12 +236,14 @@ func (h *DiagHandlers) Headers(w http.ResponseWriter, r *http.Request) {
 	requestID := requestID()
 	h.jsonHeaders(w, requestID)
 	forwardedPresent := r.Header.Get("X-Forwarded-For") != "" || r.Header.Get("X-Real-IP") != "" || r.Header.Get("Forwarded") != ""
+	originPeer := netinfo.EnrichIP(r.Context(), h.originPeerForDisplay(r))
 	h.record(r, requestID, "headers", map[string]any{
 		"ok":                        true,
 		"request_id":                requestID,
 		"proxy_observed":            forwardedPresent,
 		"forwarded_headers_present": forwardedPresent,
 		"timing_allow_origin":       true,
+		"origin_peer":               originPeer,
 	}, map[string]any{
 		"host":                  r.Host,
 		"proto":                 r.Proto,
@@ -252,6 +255,7 @@ func (h *DiagHandlers) Headers(w http.ResponseWriter, r *http.Request) {
 		"user_agent_hash":       hashHeader(r.UserAgent()),
 		"authorization_present": r.Header.Get("Authorization") != "",
 		"cookie_present":        r.Header.Get("Cookie") != "",
+		"origin_peer":           originPeer,
 	})
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"ok":                        true,
@@ -259,6 +263,7 @@ func (h *DiagHandlers) Headers(w http.ResponseWriter, r *http.Request) {
 		"proxy_observed":            forwardedPresent,
 		"forwarded_headers_present": forwardedPresent,
 		"timing_allow_origin":       true,
+		"origin_peer":               originPeer,
 	})
 }
 
@@ -387,6 +392,19 @@ func (h *DiagHandlers) originPeerIP(r *http.Request) string {
 		}
 	}
 	return direct
+}
+
+func (h *DiagHandlers) originPeerForDisplay(r *http.Request) string {
+	if h.cfg.App.TrustForwardedHeaders {
+		if ip := headerIP(r.Header.Get("X-Origin-Peer-IP")); ip != "" {
+			return ip
+		}
+	}
+	direct := directPeerIP(r.RemoteAddr)
+	if !isLocalProxyPeer(direct) {
+		return direct
+	}
+	return ""
 }
 
 func headerIP(value string) string {

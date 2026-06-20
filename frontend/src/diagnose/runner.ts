@@ -1,10 +1,10 @@
-import type { BrowserSummary, EndpointResult, EntryPoint, ProbeConfig } from '../types'
+import type { BrowserSummary, EndpointResult, EntryPoint, IPInfo, ProbeConfig } from '../types'
 import { joinURL, withNonce } from '../utils/url'
 import { percentile, ratio } from './stats'
 import { timedFetch, type TimedFetchResult } from './timed-fetch'
 import { testDiagStream } from './stream-test'
 
-export type TestKind = 'origin_ping' | 'download' | 'upload' | 'stream'
+export type TestKind = 'origin_ping' | 'headers' | 'download' | 'upload' | 'stream'
 
 const minPingSamples = 20
 
@@ -25,6 +25,7 @@ export interface DiagnoseProgressEvent {
   error_kind?: string
   timing_detail_available?: boolean
   stream_buffered?: boolean
+  origin_peer?: IPInfo
   sample_index: number
   sample_total: number
 }
@@ -48,7 +49,7 @@ export async function diagnoseEndpoint(
   const pingSamples = Math.max(probe.browser_repeat, minPingSamples)
   const endpointPublicID = endpoint.endpoint_public_id || endpoint.id
   const probeBaseURL = endpoint.probe_base_url || endpoint.lg_base_url || ''
-  const totalSteps = pingSamples + sizes.length * 2 + 1
+  const totalSteps = pingSamples + sizes.length * 2 + 2
   let step = 0
 
   for (let i = 0; i < pingSamples; i += 1) {
@@ -73,10 +74,31 @@ export async function diagnoseEndpoint(
     })
   }
 
+  const headersResult = await timedFetch(diagURL(probeBaseURL, '/diag/headers', runID, endpointPublicID), probe.browser_timeout_ms, { parseJSON: true })
+  step += 1
+  const originPeer = safeIPInfo(headersResult.json?.origin_peer)
+  onProgress?.({
+    endpoint_id: endpoint.id,
+    endpoint_public_id: endpointPublicID,
+    kind: 'headers',
+    label: '回源信息',
+    ok: headersResult.ok,
+    request_id: headersResult.request_id,
+    duration_ms: headersResult.duration_ms,
+    ttfb_ms: headersResult.ttfb_ms ?? null,
+    endpoint_ms: headersResult.endpoint_ms ?? null,
+    error_message: headersResult.error_message,
+    error_kind: headersResult.error_kind,
+    timing_detail_available: Boolean(headersResult.timing_detail_available),
+    origin_peer: originPeer,
+    sample_index: step,
+    sample_total: totalSteps,
+  })
+
   for (const size of sizes) {
     const url = new URL(diagURL(probeBaseURL, probe.paths.blob, runID, endpointPublicID))
     url.searchParams.set('size', size)
-    const result = await timedFetch(url.toString(), probe.browser_timeout_ms)
+    const result = await timedFetch(url.toString(), transferTimeoutMS(probe.browser_timeout_ms, size))
     const bytes = result.response_bytes || sizeToBytes(size)
     downloadResults.push({ size, bytes, result })
     step += 1
@@ -103,7 +125,7 @@ export async function diagnoseEndpoint(
     const bytes = sizeToBytes(size)
     const url = new URL(diagURL(probeBaseURL, probe.paths.upload || '/diag/upload', runID, endpointPublicID))
     url.searchParams.set('size', size)
-    const result = await timedFetch(url.toString(), probe.browser_timeout_ms, {
+    const result = await timedFetch(url.toString(), transferTimeoutMS(probe.browser_timeout_ms, size), {
       method: 'POST',
       body: payload(bytes),
       contentType: 'application/octet-stream',
@@ -153,6 +175,7 @@ export async function diagnoseEndpoint(
 
   const fetchResults = [
     ...originPingResults,
+    headersResult,
     ...downloadResults.map((item) => item.result),
     ...uploadResults.map((item) => item.result),
   ]
@@ -208,6 +231,10 @@ export async function diagnoseEndpoint(
     endpoint_public_id: endpointPublicID,
     name: endpoint.name,
     browser: summary,
+    netinfo: {
+      origin_peer: originPeer,
+      dns_records: endpoint.dns_records || [],
+    },
     level,
     recommendation: recommendation(level, summary),
   }
@@ -218,12 +245,14 @@ export function buildReport(
   samples: DiagnoseProgressEvent[],
   endpointLabels: Record<string, string> = {},
   customEndpoints: Array<{ endpoint_public_id: string; display_name: string; probe_base_url: string }> = [],
+  endpointNetInfo: Record<string, { origin_peer?: IPInfo; dns_records?: IPInfo[] }> = {},
 ) {
   return {
     schema_version: '2.0',
     run_id: runID,
     client_env: clientEnv(),
     endpoint_labels: endpointLabels,
+    endpoint_netinfo: endpointNetInfo,
     custom_endpoints: customEndpoints,
     samples: samples.map((sample) => ({
       endpoint_public_id: sample.endpoint_public_id,
@@ -240,6 +269,7 @@ export function buildReport(
       error_message: sample.error_message,
       timing_detail_available: Boolean(sample.timing_detail_available),
       stream_buffered: Boolean(sample.stream_buffered),
+      origin_peer: sample.origin_peer,
     })),
   }
 }
@@ -278,6 +308,20 @@ function speedBySize(items: SizedFetchResult[]): Record<string, number | null> {
     out[item.size] = mbps(item.bytes, item.result.duration_ms, item.result.ok)
   }
   return out
+}
+
+function transferTimeoutMS(baseTimeoutMS: number, size: string): number {
+  if (sizeToBytes(size) >= 20 * 1024 * 1024) return Math.max(baseTimeoutMS, 30_000)
+  return baseTimeoutMS
+}
+
+function safeIPInfo(value: any): IPInfo | undefined {
+  if (!value || typeof value !== 'object' || typeof value.ip !== 'string' || value.ip.trim() === '') return undefined
+  return {
+    ip: value.ip.trim(),
+    asn: typeof value.asn === 'string' ? value.asn.trim() : undefined,
+    as_name: typeof value.as_name === 'string' ? value.as_name.trim() : undefined,
+  }
 }
 
 function mbps(bytes: number, durationMs: number, ok: boolean): number | null {

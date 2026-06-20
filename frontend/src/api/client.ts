@@ -1,6 +1,8 @@
 import type { BootstrapResponse } from '../types'
 import { apiURL } from '../utils/url'
 
+const sub2apiCredentialKey = 'sub2api_lg_sub2api_credential'
+
 export function iframeContext(): Record<string, string> {
   const params = new URLSearchParams(window.location.search)
   return {
@@ -17,11 +19,13 @@ export function iframeContext(): Record<string, string> {
 }
 
 export async function bootstrap(): Promise<BootstrapResponse> {
+  const context = iframeContext()
+  rememberSub2APICredential(context)
   const res = await fetch(apiURL('/customer/bootstrap'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     cache: 'no-store',
-    body: JSON.stringify(iframeContext()),
+    body: JSON.stringify(context),
   })
   if (!res.ok) throw new Error(`bootstrap failed: ${res.status}`)
   const body = await res.json()
@@ -31,11 +35,13 @@ export async function bootstrap(): Promise<BootstrapResponse> {
 }
 
 export async function adminBootstrap(): Promise<BootstrapResponse> {
+  const context = iframeContext()
+  rememberSub2APICredential(context)
   const res = await fetch(apiURL('/admin/bootstrap'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     cache: 'no-store',
-    body: JSON.stringify(iframeContext()),
+    body: JSON.stringify(context),
   })
   if (!res.ok) throw new Error(`admin bootstrap failed: ${res.status}`)
   const body = await res.json()
@@ -46,7 +52,7 @@ export async function adminBootstrap(): Promise<BootstrapResponse> {
 
 export async function getEntrypoints(token: string) {
   const res = await fetch(apiURL('/customer/entrypoints'), {
-    headers: { Authorization: `Bearer ${token}` },
+    headers: authHeaders(token),
     cache: 'no-store',
   })
   if (!res.ok) throw new Error(`entrypoints failed: ${res.status}`)
@@ -56,7 +62,7 @@ export async function getEntrypoints(token: string) {
 export async function submitReport(token: string, payload: unknown): Promise<{ report_id: string; share_url: string; customer_summary?: any }> {
   const res = await fetch(apiURL('/customer/reports'), {
     method: 'POST',
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    headers: { ...authHeaders(token), 'Content-Type': 'application/json' },
     cache: 'no-store',
     body: JSON.stringify(payload),
   })
@@ -79,7 +85,7 @@ export async function listAdminReports(token: string, params: Record<string, str
   const query = new URLSearchParams(params)
   const suffix = query.toString() ? `?${query.toString()}` : ''
   const res = await fetch(apiURL(`/admin/reports${suffix}`), {
-    headers: { Authorization: `Bearer ${token}` },
+    headers: authHeaders(token),
     cache: 'no-store',
   })
   if (!res.ok) throw new Error(`admin reports failed: ${res.status}`)
@@ -88,7 +94,7 @@ export async function listAdminReports(token: string, params: Record<string, str
 
 export async function getAdminReport(token: string, reportId: string) {
   const res = await fetch(apiURL(`/admin/reports/${encodeURIComponent(reportId)}`), {
-    headers: { Authorization: `Bearer ${token}` },
+    headers: authHeaders(token),
     cache: 'no-store',
   })
   if (!res.ok) throw new Error(`admin report failed: ${res.status}`)
@@ -97,11 +103,39 @@ export async function getAdminReport(token: string, reportId: string) {
 
 export async function getEntrypointInventory(token: string) {
   const res = await fetch(apiURL('/admin/entrypoints/inventory'), {
-    headers: { Authorization: `Bearer ${token}` },
+    headers: authHeaders(token),
     cache: 'no-store',
   })
   if (!res.ok) throw new Error(`entrypoint inventory failed: ${res.status}`)
   return res.json()
+}
+
+export async function resolveCustomNetinfo(token: string, customEndpoints: Array<{ endpoint_public_id: string; display_name: string; probe_base_url: string }>) {
+  const res = await fetch(apiURL('/customer/netinfo/resolve'), {
+    method: 'POST',
+    headers: { ...authHeaders(token), 'Content-Type': 'application/json' },
+    cache: 'no-store',
+    body: JSON.stringify({ custom_endpoints: customEndpoints }),
+  })
+  if (!res.ok) throw new Error(`netinfo resolve failed: ${res.status}`)
+  return res.json()
+}
+
+function authHeaders(token: string): Record<string, string> {
+  const headers: Record<string, string> = { Authorization: `Bearer ${token}` }
+  const credential = sub2apiCredential()
+  if (credential) headers['X-Sub2API-Credential'] = credential
+  return headers
+}
+
+function rememberSub2APICredential(context: Record<string, string>) {
+  const credential = context.token || context.legacy_token || context.ticket
+  if (credential) sessionStorage.setItem(sub2apiCredentialKey, credential)
+}
+
+function sub2apiCredential(): string {
+  const params = new URLSearchParams(window.location.search)
+  return params.get('token') || params.get('legacy_token') || params.get('ticket') || sessionStorage.getItem(sub2apiCredentialKey) || ''
 }
 
 function cleanTokenFromURL() {

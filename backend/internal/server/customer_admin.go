@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"math"
+	"net"
 	"net/http"
 	"net/url"
 	"sort"
@@ -13,6 +14,7 @@ import (
 
 	"sub2api-origin-lg/backend/internal/adminclient"
 	"sub2api-origin-lg/backend/internal/entrypoints"
+	"sub2api-origin-lg/backend/internal/netinfo"
 	"sub2api-origin-lg/backend/internal/store"
 	"sub2api-origin-lg/backend/internal/urlx"
 )
@@ -81,7 +83,7 @@ func (s *Server) customerBootstrap(w http.ResponseWriter, r *http.Request) {
 		},
 		"probe":             s.cfg.Probe,
 		"entrypoint_count":  snapshotCount(snapshot),
-		"entrypoints":       safeEntrypoints(snapshot),
+		"entrypoints":       s.safeEntrypoints(r.Context(), snapshot),
 		"entrypoint_source": snapshotSource(snapshot),
 	})
 }
@@ -198,7 +200,7 @@ func (s *Server) customerEntrypoints(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]any{
-		"entrypoints": safeEntrypoints(snapshot),
+		"entrypoints": s.safeEntrypoints(r.Context(), snapshot),
 		"policy": map[string]any{
 			"hide_urls_in_ui":               true,
 			"disable_raw_debug_in_customer": true,
@@ -262,6 +264,25 @@ func (s *Server) createCustomerReport(w http.ResponseWriter, r *http.Request) {
 		"share_url":        shareURL,
 		"customer_summary": customerReport["summary"],
 	})
+}
+
+func (s *Server) customerNetinfoResolve(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		CustomEndpoints []customerCustomEndpoint `json:"custom_endpoints"`
+	}
+	if err := decodeJSON(r, &req, 1<<20); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	customEntrypoints := s.customerCustomEntrypoints(req.CustomEndpoints)
+	items := make([]map[string]any, 0, len(customEntrypoints))
+	for _, ep := range customEntrypoints {
+		items = append(items, map[string]any{
+			"endpoint_public_id": ep.ID,
+			"dns_records":        s.endpointDNSInfo(r.Context(), ep.Host),
+		})
+	}
+	writeJSON(w, map[string]any{"items": items})
 }
 
 func (s *Server) getCustomerReport(w http.ResponseWriter, r *http.Request) {
@@ -418,8 +439,14 @@ type customerReportRequest struct {
 	RunID           string                   `json:"run_id"`
 	ClientEnv       map[string]string        `json:"client_env"`
 	EndpointLabels  map[string]string        `json:"endpoint_labels"`
+	EndpointNetInfo map[string]endpointInfo  `json:"endpoint_netinfo"`
 	CustomEndpoints []customerCustomEndpoint `json:"custom_endpoints"`
 	Samples         []customerSample         `json:"samples"`
+}
+
+type endpointInfo struct {
+	OriginPeer netinfo.IPInfo   `json:"origin_peer"`
+	DNSRecords []netinfo.IPInfo `json:"dns_records"`
 }
 
 type customerCustomEndpoint struct {
@@ -496,6 +523,7 @@ func buildReports(reportID string, session *store.Session, req customerReportReq
 		}
 		metrics, codes := summarizeEndpointSamples(grouped[id])
 		level := levelFromScore(metrics.Score)
+		netInfo := sanitizeEndpointInfo(req.EndpointNetInfo[id])
 		customerEntrypoints = append(customerEntrypoints, map[string]any{
 			"endpoint_public_id":         id,
 			"display_name":               displayName,
@@ -512,6 +540,8 @@ func buildReports(reportID string, session *store.Session, req customerReportReq
 			"stream_buffering_suspected": metrics.StreamBuffered,
 			"cors_ok":                    metrics.CORSOK,
 			"timing_detail_available":    metrics.TimingDetailAvailable,
+			"origin_peer":                netInfo.OriginPeer,
+			"endpoint_dns":               netInfo.DNSRecords,
 		})
 		internalEntrypoints = append(internalEntrypoints, map[string]any{
 			"endpoint_public_id":     id,
@@ -521,6 +551,7 @@ func buildReports(reportID string, session *store.Session, req customerReportReq
 			"lg_base_url":            ep.LGBaseURL,
 			"source":                 ep.Source,
 			"browser_metrics":        metrics,
+			"netinfo":                netInfo,
 			"diag_event_refs":        sampleRequestIDs(grouped[id]),
 			"server_probe":           map[string]any{},
 		})
@@ -705,7 +736,7 @@ func summarizeEndpointSamples(samples []customerSample) (endpointMetrics, []stri
 	}, codes
 }
 
-func safeEntrypoints(snapshot *entrypoints.Snapshot) []map[string]any {
+func (s *Server) safeEntrypoints(ctx context.Context, snapshot *entrypoints.Snapshot) []map[string]any {
 	if snapshot == nil {
 		return []map[string]any{}
 	}
@@ -719,10 +750,78 @@ func safeEntrypoints(snapshot *entrypoints.Snapshot) []map[string]any {
 			"display_order":      i + 1,
 			"description":        ep.Description,
 			"probe_base_url":     ep.LGBaseURL,
+			"dns_records":        s.endpointDNSInfo(ctx, ep.Host),
 			"capabilities":       []string{"meta", "ping", "blob", "upload", "stream", "headers"},
 		})
 	}
 	return out
+}
+
+func (s *Server) endpointDNSInfo(ctx context.Context, host string) []netinfo.IPInfo {
+	return netinfo.ResolveHost(ctx, host, 6)
+}
+
+func sanitizeEndpointInfo(info endpointInfo) endpointInfo {
+	return endpointInfo{
+		OriginPeer: sanitizeIPInfo(info.OriginPeer),
+		DNSRecords: sanitizeIPInfoList(info.DNSRecords, 8),
+	}
+}
+
+func sanitizeIPInfoList(items []netinfo.IPInfo, limit int) []netinfo.IPInfo {
+	if len(items) == 0 || limit <= 0 {
+		return []netinfo.IPInfo{}
+	}
+	out := make([]netinfo.IPInfo, 0, min(len(items), limit))
+	seen := map[string]bool{}
+	for _, item := range items {
+		clean := sanitizeIPInfo(item)
+		if clean.IP == "" || seen[clean.IP] {
+			continue
+		}
+		seen[clean.IP] = true
+		out = append(out, clean)
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out
+}
+
+func sanitizeIPInfo(item netinfo.IPInfo) netinfo.IPInfo {
+	ip := strings.TrimSpace(item.IP)
+	if ip == "" || net.ParseIP(strings.Trim(ip, "[]")) == nil {
+		return netinfo.IPInfo{}
+	}
+	return netinfo.IPInfo{
+		IP:     ip,
+		ASN:    safeASN(item.ASN),
+		ASName: safeASName(item.ASName),
+	}
+}
+
+func safeASN(value string) string {
+	value = strings.TrimSpace(strings.TrimPrefix(strings.ToUpper(value), "AS"))
+	if value == "" {
+		return ""
+	}
+	for _, r := range value {
+		if r < '0' || r > '9' {
+			return ""
+		}
+	}
+	return value
+}
+
+func safeASName(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	if len([]rune(value)) > 80 {
+		return string([]rune(value)[:80])
+	}
+	return value
 }
 
 const maxCustomerCustomEndpoints = 8

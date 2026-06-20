@@ -46,6 +46,13 @@ export interface EntryPoint {
   scheme?: string
   enabled?: boolean
   capabilities?: string[]
+  dns_records?: IPInfo[]
+}
+
+export interface IPInfo {
+  ip: string
+  asn?: string
+  as_name?: string
 }
 
 export interface BrowserSummary {
@@ -85,6 +92,10 @@ export interface EndpointResult {
   endpoint_public_id?: string
   name: string
   browser: BrowserSummary
+  netinfo?: {
+    origin_peer?: IPInfo
+    dns_records?: IPInfo[]
+  }
   level: 'good' | 'warning' | 'bad'
   recommendation: string
 }

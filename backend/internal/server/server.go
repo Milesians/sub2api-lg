@@ -103,6 +103,8 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 		s.requireSessionType("customer", s.customerEntrypoints)(w, r)
 	case r.Method == http.MethodGet && path == "/api/customer/entrypoints":
 		s.requireSessionType("customer", s.customerEntrypoints)(w, r)
+	case r.Method == http.MethodPost && path == "/api/customer/netinfo/resolve":
+		s.requireSessionType("customer", s.customerNetinfoResolve)(w, r)
 	case r.Method == http.MethodPost && path == "/api/reports":
 		s.requireSessionType("customer", s.createReport)(w, r)
 	case r.Method == http.MethodPost && path == "/api/customer/reports":
@@ -179,7 +181,7 @@ func (s *Server) withCORS(next http.Handler) http.Handler {
 				w.Header().Set("Access-Control-Allow-Origin", origin)
 				w.Header().Set("Vary", "Origin")
 				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-				w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+				w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Sub2API-Credential")
 			}
 			if r.Method == http.MethodOptions {
 				w.WriteHeader(http.StatusNoContent)
@@ -273,6 +275,10 @@ func (s *Server) requireSessionType(sessionType string, next http.HandlerFunc) h
 		session := sessionFromContext(r.Context())
 		if session == nil || session.SessionType != sessionType {
 			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		if err := s.verifySessionSub2APICredential(r.Context(), r, session); err != nil {
+			http.Error(w, err.Error(), statusForBootstrapError(err))
 			return
 		}
 		next(w, r)
@@ -522,6 +528,21 @@ func bearerToken(header string) string {
 		return ""
 	}
 	return strings.TrimSpace(parts[1])
+}
+
+func (s *Server) verifySessionSub2APICredential(ctx context.Context, r *http.Request, session *store.Session) error {
+	credential := strings.TrimSpace(r.Header.Get("X-Sub2API-Credential"))
+	if credential == "" {
+		return errUnauthorized("sub2api credential is required")
+	}
+	user, err := s.verifyBootstrapUser(ctx, credential, session.UserID)
+	if err != nil {
+		return err
+	}
+	if session.SessionType == "admin" && !isAdminUser(user) {
+		return errForbidden("admin permission required")
+	}
+	return nil
 }
 
 func requestOrigin(r *http.Request, cfg *config.Config) string {

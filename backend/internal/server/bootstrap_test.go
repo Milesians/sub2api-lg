@@ -15,6 +15,7 @@ import (
 	"sub2api-origin-lg/backend/internal/adminclient"
 	"sub2api-origin-lg/backend/internal/config"
 	"sub2api-origin-lg/backend/internal/entrypoints"
+	"sub2api-origin-lg/backend/internal/netinfo"
 	"sub2api-origin-lg/backend/internal/store"
 )
 
@@ -204,6 +205,10 @@ func TestBuildReportsKeepsCustomEndpointURLAdminOnly(t *testing.T) {
 	req := customerReportRequest{
 		RunID:          "run_1",
 		EndpointLabels: map[string]string{"custom_abc": "自定义入口"},
+		EndpointNetInfo: map[string]endpointInfo{"custom_abc": {
+			OriginPeer: netinfo.IPInfo{IP: "203.0.113.10", ASN: "64496", ASName: "TEST-NET"},
+			DNSRecords: []netinfo.IPInfo{{IP: "203.0.113.20", ASN: "64497", ASName: "TEST-DNS"}},
+		}},
 		Samples: []customerSample{{
 			EndpointPublicID:      "custom_abc",
 			Kind:                  "origin_ping",
@@ -229,6 +234,9 @@ func TestBuildReportsKeepsCustomEndpointURLAdminOnly(t *testing.T) {
 	}
 	if strings.Contains(string(customerJSON), "custom.example.com") {
 		t.Fatalf("customer_report should hide custom endpoint URL: %s", string(customerJSON))
+	}
+	if !strings.Contains(string(customerJSON), "203.0.113.10") || !strings.Contains(string(customerJSON), "TEST-DNS") {
+		t.Fatalf("customer_report should include safe netinfo: %s", string(customerJSON))
 	}
 	internalJSON, err := json.Marshal(internalReport)
 	if err != nil {
@@ -331,6 +339,52 @@ func TestBootstrapVerifiesSub2APITokenAndUserID(t *testing.T) {
 	res = postBootstrap(handler, mismatchedUser)
 	if res.Code != http.StatusForbidden {
 		t.Fatalf("mismatched user status = %d, want 403", res.Code)
+	}
+}
+
+func TestCustomerAPIRequiresSub2APICredential(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/user" {
+			http.NotFound(w, r)
+			return
+		}
+		if r.Header.Get("Authorization") != "Bearer valid-token" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":{"id":"123","username":"demo"}}`))
+	}))
+	defer upstream.Close()
+
+	handler := testServer(t, upstream.URL)
+	okBody := []byte(`{"user_id":"123","token":"valid-token","src_host":"sub2api.example.com","src_url":"https://sub2api.example.com/custom/network-diagnose"}`)
+	res := postBootstrap(handler, okBody)
+	if res.Code != http.StatusOK {
+		t.Fatalf("valid bootstrap status = %d, body = %s", res.Code, res.Body.String())
+	}
+	var boot struct {
+		SessionToken string `json:"session_token"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &boot); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/customer/netinfo/resolve", strings.NewReader(`{}`))
+	req.Header.Set("Authorization", "Bearer "+boot.SessionToken)
+	res = httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+	if res.Code != http.StatusUnauthorized {
+		t.Fatalf("missing sub2api credential status = %d, want 401", res.Code)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/api/customer/netinfo/resolve", strings.NewReader(`{}`))
+	req.Header.Set("Authorization", "Bearer "+boot.SessionToken)
+	req.Header.Set("X-Sub2API-Credential", "valid-token")
+	res = httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("valid sub2api credential status = %d, body = %s", res.Code, res.Body.String())
 	}
 }
 

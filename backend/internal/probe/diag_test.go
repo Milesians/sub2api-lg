@@ -1,6 +1,7 @@
 package probe
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -60,6 +61,31 @@ func TestPingIgnoresSpoofedProxyPeerIPFromPublicPeer(t *testing.T) {
 	}
 	if got := res.Header().Get("X-Origin-Peer-IP"); got != "" {
 		t.Fatalf("X-Origin-Peer-IP = %q, want empty", got)
+	}
+}
+
+func TestHeadersDisplaysOnlyOriginPeerIP(t *testing.T) {
+	cfg := config.Default()
+	cfg.App.TrustForwardedHeaders = true
+	handler := NewDiagHandlers(cfg)
+	req := httptest.NewRequest(http.MethodGet, "/diag/headers", nil)
+	req.RemoteAddr = "172.21.0.1:443"
+	req.Header.Set("X-Origin-Peer-IP", "10.0.0.8")
+	req.Header.Set("X-Real-IP", "10.0.0.9")
+	res := httptest.NewRecorder()
+
+	handler.Headers(res, req)
+
+	var body struct {
+		OriginPeer struct {
+			IP string `json:"ip"`
+		} `json:"origin_peer"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.OriginPeer.IP != "10.0.0.8" {
+		t.Fatalf("origin_peer.ip = %q, want X-Origin-Peer-IP", body.OriginPeer.IP)
 	}
 }
 

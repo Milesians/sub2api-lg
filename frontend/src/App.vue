@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { adminBootstrap, bootstrap, getAdminReport, getEntrypointInventory, getEntrypoints, getReport, listAdminReports, submitReport } from './api/client'
+import { adminBootstrap, bootstrap, getAdminReport, getEntrypointInventory, getEntrypoints, getReport, listAdminReports, resolveCustomNetinfo, submitReport } from './api/client'
 import { buildReport, diagnoseEndpoint, type DiagnoseProgressEvent } from './diagnose/runner'
-import type { BootstrapResponse, EndpointResult, EntryPoint } from './types'
+import type { BootstrapResponse, EndpointResult, EntryPoint, IPInfo } from './types'
 
 type RunStatus = 'idle' | 'running' | 'done' | 'failed'
 type ViewMode = 'customer' | 'report' | 'admin'
@@ -166,7 +166,7 @@ async function run() {
       }
     }
     if (results.value.length === 0) throw new Error('没有端点完成测试')
-    const payload = buildReport(runID, allSamples(), endpointLabels(), customEndpointPayload())
+    const payload = buildReport(runID, allSamples(), endpointLabels(), customEndpointPayload(), endpointNetInfoPayload())
     const saved = await submitReport(token.value, payload)
     reportId.value = saved.report_id
     shareURL.value = saved.share_url
@@ -179,13 +179,14 @@ async function run() {
   }
 }
 
-function addCustomEndpoint() {
+async function addCustomEndpoint() {
   if (running.value) return
   error.value = ''
   try {
     if (!boot.value) throw new Error('页面尚未初始化')
-    const endpoint = buildCustomEndpoint(customURL.value, customName.value, boot.value.app.public_path)
+    let endpoint = buildCustomEndpoint(customURL.value, customName.value, boot.value.app.public_path)
     if (entrypoints.value.some((item) => item.id === endpoint.id)) throw new Error('该自定义端点已存在')
+    endpoint = await enrichCustomEndpoint(endpoint)
     customEntrypoints.value = [...customEntrypoints.value, endpoint]
     selectedIds.value = Array.from(new Set([...selectedIds.value, endpoint.id]))
     customName.value = ''
@@ -193,6 +194,17 @@ function addCustomEndpoint() {
   } catch (e) {
     error.value = String((e as Error)?.message || e)
   }
+}
+
+async function enrichCustomEndpoint(endpoint: EntryPoint): Promise<EntryPoint> {
+  if (!token.value) return endpoint
+  const body = await resolveCustomNetinfo(token.value, [{
+    endpoint_public_id: endpoint.endpoint_public_id || endpoint.id,
+    display_name: displayName(endpoint),
+    probe_base_url: endpoint.probe_base_url || '',
+  }])
+  const item = (body.items || []).find((candidate: any) => candidate.endpoint_public_id === (endpoint.endpoint_public_id || endpoint.id))
+  return { ...endpoint, dns_records: Array.isArray(item?.dns_records) ? item.dns_records : [] }
 }
 
 function removeCustomEndpoint(id: string) {
@@ -314,6 +326,19 @@ function customEndpointPayload() {
     }))
 }
 
+function endpointNetInfoPayload() {
+  const out: Record<string, { origin_peer?: IPInfo; dns_records?: IPInfo[] }> = {}
+  for (const endpoint of entrypoints.value) {
+    const id = endpoint.endpoint_public_id || endpoint.id
+    const result = results.value.find((item) => item.endpoint_public_id === id || item.endpoint_id === endpoint.id)
+    out[id] = {
+      origin_peer: result?.netinfo?.origin_peer,
+      dns_records: result?.netinfo?.dns_records || endpoint.dns_records || [],
+    }
+  }
+  return out
+}
+
 function allSamples(): DiagnoseProgressEvent[] {
   return Object.values(runStates.value).flatMap((state) => state.samples)
 }
@@ -377,12 +402,13 @@ function recordProgress(event: DiagnoseProgressEvent) {
     const status = event.ok ? '成功' : '失败'
     const speed = event.mbps != null ? ` · ${formatMbps(event.mbps)}` : ''
     const latency = event.ttft_ms != null ? ` · TTFT ${formatMs(event.ttft_ms)}` : event.ttfb_ms != null ? ` · TTFB ${formatMs(event.ttfb_ms)}` : ''
+    const origin = event.origin_peer?.ip ? ` · 回源 ${formatIPInfo(event.origin_peer)}` : ''
     return {
       ...state,
       current: `${event.label} (${event.sample_index}/${event.sample_total})`,
       samples,
       metrics: summarizeSamples(samples),
-      logs: [`${event.label} ${status}${latency}${speed}`, ...state.logs].slice(0, 7),
+      logs: [`${event.label} ${status}${latency}${speed}${origin}`, ...state.logs].slice(0, 7),
     }
   })
 }
@@ -481,6 +507,26 @@ function formatMbps(value: number | null | undefined) {
   return value == null ? '-' : `${Number(value).toFixed(2)} Mbps`
 }
 
+function formatIPInfo(value: IPInfo | null | undefined) {
+  if (!value?.ip) return '-'
+  const asn = value.asn ? `AS${value.asn}` : ''
+  const name = value.as_name ? ` ${value.as_name}` : ''
+  return `${value.ip}${asn ? ` (${asn}${name})` : ''}`
+}
+
+function formatIPList(values: IPInfo[] | null | undefined) {
+  if (!values?.length) return '-'
+  return values.slice(0, 4).map((item) => formatIPInfo(item)).join(' / ')
+}
+
+function endpointDNS(endpoint: EntryPoint, result?: EndpointResult) {
+  return result?.netinfo?.dns_records || endpoint.dns_records || []
+}
+
+function endpointOriginPeer(result?: EndpointResult) {
+  return result?.netinfo?.origin_peer
+}
+
 function pct(value: number | null | undefined) {
   return value == null ? '-' : `${Math.round(value * 100)}%`
 }
@@ -575,6 +621,8 @@ function applyTheme(theme: string) {
             <div><span class="label">下载 / 上传</span><strong>{{ formatMbps(ep.download_mbps) }} / {{ formatMbps(ep.upload_mbps) }}</strong></div>
             <div><span class="label">流式首事件</span><strong>{{ formatMs(ep.stream_first_event_ms) }}</strong></div>
             <div><span class="label">CORS / Timing</span><strong>{{ ep.cors_ok ? '正常' : '异常' }} / {{ ep.timing_detail_available ? '可用' : '不可用' }}</strong></div>
+            <div><span class="label">端点 DNS</span><strong>{{ formatIPList(ep.endpoint_dns) }}</strong></div>
+            <div><span class="label">源站回源 IP</span><strong>{{ formatIPInfo(ep.origin_peer) }}</strong></div>
           </div>
         </article>
       </section>
@@ -776,6 +824,7 @@ function applyTheme(theme: string) {
             <span class="endpoint-main">
               <strong>{{ displayName(row.endpoint) }}</strong>
               <span>{{ row.endpoint.description || '浏览器诊断入口' }}</span>
+              <span>DNS {{ formatIPList(row.endpoint.dns_records) }}</span>
             </span>
             <span :class="['run-status', row.state.status]">{{ statusText(row.state.status) }}</span>
             <button v-if="row.endpoint.source === 'custom'" class="ghost small" :disabled="running" type="button" @click.prevent.stop="removeCustomEndpoint(row.endpoint.id)">移除</button>
@@ -807,6 +856,8 @@ function applyTheme(theme: string) {
             <div><span class="label">Ping 延迟</span><strong>{{ formatMs(row.state.metrics.avgPing) }}</strong></div>
             <div><span class="label">TTFB</span><strong>{{ formatMs(row.state.metrics.avgTTFB) }}</strong></div>
             <div><span class="label">TTFT</span><strong>{{ formatMs(row.state.metrics.avgTTFT) }}</strong></div>
+            <div><span class="label">端点 DNS</span><strong>{{ formatIPList(endpointDNS(row.endpoint, row.result)) }}</strong></div>
+            <div><span class="label">源站回源 IP</span><strong>{{ formatIPInfo(endpointOriginPeer(row.result)) }}</strong></div>
             <div v-for="size in sizeLabels" :key="`${row.endpoint.id}-download-${size}`"><span class="label">下载 {{ size }}</span><strong>{{ formatMbps(metricBySize(row.state.metrics.downloadBySize, size)) }}</strong></div>
             <div v-for="size in sizeLabels" :key="`${row.endpoint.id}-upload-${size}`"><span class="label">上传 {{ size }}</span><strong>{{ formatMbps(metricBySize(row.state.metrics.uploadBySize, size)) }}</strong></div>
           </div>
