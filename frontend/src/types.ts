@@ -80,6 +80,7 @@ export interface EndpointResult {
   lg_base_url: string
   browser: BrowserSummary
   client_trace?: ClientTraceInfo | null
+  origin_trace?: TraceIPInfo[]
   level: 'good' | 'warning' | 'bad'
   recommendation: string
 }

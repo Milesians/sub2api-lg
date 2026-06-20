@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { bootstrap, getCloudflareTrace, getEntrypoints, getReport, iframeContext, submitReport } from './api/client'
-import { asnLabel, traceEndpointFromBrowser } from './diagnose/client-trace'
+import { asnLabel, traceEndpointFromBrowser, traceIPFromBrowser } from './diagnose/client-trace'
 import { buildReport, diagnoseEndpoint, type DiagnoseProgressEvent } from './diagnose/runner'
-import type { BootstrapResponse, ClientTraceInfo, EndpointResult, EntryPoint } from './types'
+import type { BootstrapResponse, ClientTraceInfo, EndpointResult, EntryPoint, TraceIPInfo } from './types'
 
 type RunStatus = 'idle' | 'running' | 'done' | 'failed'
 
@@ -26,6 +26,7 @@ interface EndpointRunState {
   samples: DiagnoseProgressEvent[]
   metrics: LiveMetrics
   originPeerIPs: string[]
+  originPeerTrace: TraceIPInfo[]
   clientTrace?: ClientTraceInfo | null
   result?: EndpointResult
 }
@@ -133,6 +134,7 @@ async function run() {
       }))
       try {
         const result = await diagnoseEndpoint(endpoint, boot.value.probe, (event) => recordProgress(event))
+        result.origin_trace = await diagnoseOriginPeerTrace(endpoint.id)
         const clientTrace = await diagnoseClientTrace(endpoint, result)
         result.client_trace = clientTrace
         results.value.push(result)
@@ -171,6 +173,29 @@ async function run() {
 
 async function loadCloudflareTrace() {
   cfTrace.value = await getCloudflareTrace()
+}
+
+async function diagnoseOriginPeerTrace(endpointID: string): Promise<TraceIPInfo[]> {
+  const ips = endpointState(endpointID).originPeerIPs
+  if (ips.length === 0) return []
+  patchState(endpointID, (state) => ({
+    ...state,
+    current: '回源 ASN 查询中',
+    logs: ['回源 ASN 查询中', ...state.logs].slice(0, 8),
+  }))
+  const traced = await Promise.all(ips.map(async (ip) => {
+    try {
+      return await traceIPFromBrowser(ip)
+    } catch {
+      return { ip, asn: null }
+    }
+  }))
+  patchState(endpointID, (state) => ({
+    ...state,
+    originPeerTrace: traced,
+    logs: [`回源 ASN 查询完成：${traced.length} 个 IP`, ...state.logs].slice(0, 8),
+  }))
+  return traced
 }
 
 async function diagnoseClientTrace(endpoint: EntryPoint, result: EndpointResult): Promise<ClientTraceInfo | null> {
@@ -290,6 +315,7 @@ function blankState(): EndpointRunState {
     samples: [],
     metrics: emptyMetrics(),
     originPeerIPs: [],
+    originPeerTrace: [],
   }
 }
 
@@ -319,6 +345,7 @@ function recordProgress(event: DiagnoseProgressEvent) {
   patchState(event.endpoint_id, (state) => {
     const samples = [...state.samples, event]
     const originPeerIPs = event.origin_peer_ip ? appendUnique(state.originPeerIPs, event.origin_peer_ip) : state.originPeerIPs
+    const originPeerTrace = event.origin_peer_ip ? appendTraceIP(state.originPeerTrace, event.origin_peer_ip) : state.originPeerTrace
     const status = event.ok ? '成功' : '失败'
     const speed = event.mbps != null ? ` · ${formatMbps(event.mbps)}` : ''
     const latency = event.ttft_ms != null ? ` · TTFT ${formatMs(event.ttft_ms)}` : event.ttfb_ms != null ? ` · TTFB ${formatMs(event.ttfb_ms)}` : ''
@@ -327,6 +354,7 @@ function recordProgress(event: DiagnoseProgressEvent) {
       current: `${event.label} (${event.sample_index}/${event.sample_total})`,
       samples,
       originPeerIPs,
+      originPeerTrace,
       metrics: summarizeSamples(samples),
       logs: [`${event.label} ${status}${latency}${speed}`, ...state.logs].slice(0, 8),
     }
@@ -414,15 +442,12 @@ function pct(value: number | null | undefined) {
   return value == null ? '-' : `${Math.round(value * 100)}%`
 }
 
-function originPeerIPsText(values: string[]): string {
-  if (values.length === 0) return '-'
-  const visible = values.slice(0, 4)
-  const suffix = values.length > visible.length ? ` / +${values.length - visible.length}` : ''
-  return `${visible.join(' / ')}${suffix}`
-}
-
 function appendUnique(values: string[], value: string): string[] {
   return values.includes(value) ? values : [...values, value]
+}
+
+function appendTraceIP(values: TraceIPInfo[], ip: string): TraceIPInfo[] {
+  return values.some((item) => item.ip === ip) ? values : [...values, { ip }]
 }
 
 function statusText(status: RunStatus) {
@@ -688,6 +713,27 @@ function manualEndpointID(value: string): string {
             </div>
           </div>
           <div class="section-title">完整测试（通过端点接触源站）</div>
+          <div class="client-trace origin-trace">
+            <div class="client-trace-head">
+              <strong>回源连接 IP（端点到源站）</strong>
+              <span>{{ row.state.originPeerTrace.length ? `${row.state.originPeerTrace.length} 个 IP` : '等待数据' }}</span>
+            </div>
+            <div v-if="row.state.originPeerTrace.length" class="trace-table">
+              <div class="trace-row trace-head">
+                <span>IP</span>
+                <span>ASN</span>
+                <span>运营商</span>
+                <span>Prefix</span>
+              </div>
+              <div v-for="ip in row.state.originPeerTrace" :key="`${row.endpoint.id}-origin-${ip.ip}`" class="trace-row">
+                <span>{{ ip.ip }}</span>
+                <span>{{ asnLabel(ip.asn) }}</span>
+                <span>{{ ip.asn?.name || '-' }}</span>
+                <span>{{ ip.asn?.prefix || '-' }}</span>
+              </div>
+            </div>
+            <div v-else class="trace-empty">等待源站 Ping 返回回源连接 IP</div>
+          </div>
           <div class="metric-grid">
             <div>
               <span class="label">完整测试成功率</span>
@@ -708,10 +754,6 @@ function manualEndpointID(value: string): string {
             <div>
               <span class="label">TTFT 平均</span>
               <strong>{{ formatMs(row.state.metrics.avgTTFT) }}</strong>
-            </div>
-            <div>
-              <span class="label">回源连接 IP</span>
-              <strong>{{ originPeerIPsText(row.state.originPeerIPs) }}</strong>
             </div>
             <div v-for="size in sizeLabels" :key="`${row.endpoint.id}-download-${size}`">
               <span class="label">下载 {{ size }}</span>

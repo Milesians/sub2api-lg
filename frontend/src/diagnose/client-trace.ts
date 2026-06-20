@@ -40,6 +40,13 @@ export async function traceEndpointFromBrowser(endpoint: EntryPoint, browser: Br
   return trace
 }
 
+export async function traceIPFromBrowser(ip: string): Promise<TraceIPInfo> {
+  return {
+    ip,
+    asn: await lookupASN(ip),
+  }
+}
+
 async function resolveHost(host: string): Promise<string[]> {
   const answers = await Promise.allSettled([
     resolveDNS(host, 'A').then((items) => items.map((item) => item.data?.trim() || '').filter(isIPv4)),

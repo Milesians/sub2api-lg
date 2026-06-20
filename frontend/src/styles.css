@@ -358,6 +358,11 @@ h2 {
   border-top: 0;
 }
 
+.trace-empty {
+  color: #5f6c7b;
+  font-size: 12px;
+}
+
 .log-list {
   background: #f5f7fb;
   border-radius: 8px;
@@ -539,6 +544,7 @@ th {
   .card-head p,
   .current-line,
   .client-trace-head span,
+  .trace-empty,
   .section-title,
   .panel-head span,
   .label {
