@@ -138,6 +138,11 @@ VALUES (?, ?, ?, ?, ?, ?)`,
 	return err
 }
 
+func (s *Store) DeleteReportsBefore(ctx context.Context, cutoff time.Time) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM reports WHERE created_at < ?`, cutoff)
+	return err
+}
+
 func (s *Store) GetReport(ctx context.Context, id string) (*Report, error) {
 	row := s.db.QueryRowContext(ctx, `
 SELECT id, session_id, user_id, summary_json, payload_json, created_at

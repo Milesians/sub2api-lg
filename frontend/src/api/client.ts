@@ -48,9 +48,8 @@ export async function submitReport(token: string, payload: unknown): Promise<{ r
   return res.json()
 }
 
-export async function getReport(reportId: string, token: string) {
+export async function getReport(reportId: string) {
   const res = await fetch(apiURL(`/reports/${encodeURIComponent(reportId)}`), {
-    headers: { Authorization: `Bearer ${token}` },
     cache: 'no-store',
   })
   if (!res.ok) throw new Error(`report fetch failed: ${res.status}`)

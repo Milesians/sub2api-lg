@@ -33,6 +33,8 @@ type Server struct {
 	staticDir   string
 }
 
+const reportRetention = 72 * time.Hour
+
 func New(cfg *config.Config, db *store.Store, cache *entrypoints.Cache, serverProbe *probe.ServerProbe) *Server {
 	return &Server{
 		cfg:         cfg,
@@ -72,7 +74,7 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodPost && path == "/api/reports":
 		s.requireSession(s.createReport)(w, r)
 	case r.Method == http.MethodGet && strings.HasPrefix(path, "/api/reports/"):
-		s.requireSession(s.getReport)(w, r)
+		s.getReport(w, r)
 	case r.Method == http.MethodGet && path == s.cfg.Probe.Paths.Ping:
 		s.diag.Ping(w, r)
 	case r.Method == http.MethodGet && path == s.cfg.Probe.Paths.Blob:
@@ -259,9 +261,10 @@ func (s *Server) createReport(w http.ResponseWriter, r *http.Request) {
 
 	reportID := "rpt_" + time.Now().Format("20060102_") + randomToken(12)
 	now := time.Now()
+	_ = s.store.DeleteReportsBefore(r.Context(), now.Add(-reportRetention))
 	payload["report_id"] = reportID
-	payload["session_id"] = session.ID
 	payload["created_at"] = now.Format(time.RFC3339)
+	sanitizeReportPayload(payload)
 
 	summary := rawObject(payload["summary"])
 	payloadJSON, _ := json.Marshal(payload)
@@ -288,7 +291,7 @@ func (s *Server) createReport(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) getReport(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimPrefix(r.URL.Path, "/api/reports/")
-	report, err := s.store.GetReport(r.Context(), id)
+	report, err := s.findReport(r.Context(), id)
 	if err != nil {
 		http.Error(w, "get report failed", http.StatusInternalServerError)
 		return
@@ -332,7 +335,7 @@ func (s *Server) serveIndex(w http.ResponseWriter, r *http.Request) {
 func (s *Server) serveReport(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimPrefix(r.URL.Path, "/report/")
 	id = strings.SplitN(id, "/", 2)[0]
-	report, err := s.store.GetReport(r.Context(), id)
+	report, err := s.findReport(r.Context(), id)
 	if err != nil {
 		http.Error(w, "get report failed", http.StatusInternalServerError)
 		return
@@ -354,6 +357,18 @@ func (s *Server) serveReport(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Security-Policy", "frame-ancestors "+s.frameAncestors())
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_, _ = w.Write([]byte(injected))
+}
+
+func (s *Server) findReport(ctx context.Context, id string) (*store.Report, error) {
+	report, err := s.store.GetReport(ctx, id)
+	if err != nil || report == nil {
+		return report, err
+	}
+	if time.Since(report.CreatedAt) > reportRetention {
+		_ = s.store.DeleteReportsBefore(ctx, time.Now().Add(-reportRetention))
+		return nil, nil
+	}
+	return report, nil
 }
 
 func (s *Server) serveAsset(w http.ResponseWriter, r *http.Request) {
@@ -546,6 +561,18 @@ func snapshotSource(snapshot *entrypoints.Snapshot) string {
 		return ""
 	}
 	return snapshot.Source
+}
+
+func sanitizeReportPayload(payload map[string]any) {
+	delete(payload, "session_id")
+	delete(payload, "user_id")
+	delete(payload, "username")
+	delete(payload, "token")
+	if raw, ok := payload["iframe_context"].(map[string]any); ok {
+		delete(raw, "user_id")
+		delete(raw, "username")
+		delete(raw, "token")
+	}
 }
 
 func rawObject(value any) json.RawMessage {

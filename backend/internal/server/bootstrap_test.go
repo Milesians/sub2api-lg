@@ -2,10 +2,14 @@ package server
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"sub2api-origin-lg/backend/internal/adminclient"
 	"sub2api-origin-lg/backend/internal/config"
@@ -63,6 +67,70 @@ func TestRootRedirectPreservesRouterPrefix(t *testing.T) {
 	}
 	if location := res.Header().Get("Location"); location != "/lg/embed?user_id=123&token=valid-token" {
 		t.Fatalf("redirect location = %q, want /lg/embed?user_id=123&token=valid-token", location)
+	}
+}
+
+func TestReportPayloadSanitization(t *testing.T) {
+	payload := map[string]any{
+		"session_id": "sess_123",
+		"user_id":    "user_123",
+		"username":   "demo",
+		"token":      "secret",
+		"iframe_context": map[string]any{
+			"user_id":  "user_123",
+			"username": "demo",
+			"token":    "secret",
+			"src_host": "sub2api.example.com",
+		},
+	}
+	sanitizeReportPayload(payload)
+	b, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(b)
+	for _, forbidden := range []string{"sess_123", "user_123", "demo", "secret"} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("sanitized report still contains %q: %s", forbidden, text)
+		}
+	}
+	if !strings.Contains(text, "sub2api.example.com") {
+		t.Fatalf("safe iframe context was removed: %s", text)
+	}
+}
+
+func TestExpiredReportIsNotReturned(t *testing.T) {
+	cfg := config.Default()
+	cfg.Storage.DSN = filepath.Join(t.TempDir(), "test.db")
+	if err := cfg.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	db, err := store.Open(cfg.Storage.DSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	admin := adminclient.New(cfg)
+	cache := entrypoints.NewCache(cfg, admin)
+	server := New(cfg, db, cache, probe.NewServerProbe(cfg))
+
+	err = db.CreateReport(context.Background(), store.Report{
+		ID:          "rpt_old",
+		SessionID:   "sess_123",
+		UserID:      "user_123",
+		SummaryJSON: json.RawMessage(`{}`),
+		PayloadJSON: json.RawMessage(`{"report_id":"rpt_old"}`),
+		CreatedAt:   time.Now().Add(-reportRetention - time.Minute),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := server.findReport(context.Background(), "rpt_old")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report != nil {
+		t.Fatal("expired report should not be returned")
 	}
 }
 

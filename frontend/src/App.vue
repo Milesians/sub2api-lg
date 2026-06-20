@@ -159,8 +159,7 @@ async function loadReportPage() {
   }
   const id = window.location.pathname.split('/report/')[1]?.split('/')[0]
   if (!id) throw new Error('report id missing')
-  if (!token.value) throw new Error('当前报告 JSON 需要诊断会话授权访问')
-  reportJSON.value = await getReport(id, token.value)
+  reportJSON.value = await getReport(id)
 }
 
 function notifyParent(summary: any) {
