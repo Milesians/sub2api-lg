@@ -8,6 +8,7 @@ export interface TimedFetchResult {
   error_message?: string
   timing_detail_available?: boolean
   ttfb_ms?: number | null
+  origin_peer_ip?: string
 }
 
 export interface TimedFetchOptions {
@@ -44,6 +45,7 @@ export async function timedFetch(url: string, timeoutMs: number, options: TimedF
       error_kind: res.ok ? undefined : 'http_status',
       timing_detail_available: Boolean(timing?.detail_available),
       ttfb_ms: timing?.detail_available ? Math.round(timing.ttfb_ms) : Math.round(firstHeadersAt - started),
+      origin_peer_ip: res.headers.get('X-Origin-Peer-IP') || undefined,
     }
   } catch (e) {
     const error = e as Error

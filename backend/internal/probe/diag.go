@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -19,6 +20,8 @@ type DiagHandlers struct {
 	cfg *config.Config
 }
 
+const diagExposeHeaders = "Server-Timing, X-Request-Id, Content-Length, X-Origin-Peer-IP"
+
 func NewDiagHandlers(cfg *config.Config) *DiagHandlers {
 	return &DiagHandlers{cfg: cfg}
 }
@@ -29,8 +32,11 @@ func (h *DiagHandlers) Ping(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Timing-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Expose-Headers", "Server-Timing, X-Request-Id, Content-Length")
+	w.Header().Set("Access-Control-Expose-Headers", diagExposeHeaders)
 	w.Header().Set("X-Request-Id", requestID)
+	if peerIP := directPeerIP(r.RemoteAddr); peerIP != "" {
+		w.Header().Set("X-Origin-Peer-IP", peerIP)
+	}
 	w.Header().Set("Server-Timing", "app;dur=1")
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"ok":          true,
@@ -54,7 +60,7 @@ func (h *DiagHandlers) Blob(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Timing-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Expose-Headers", "Server-Timing, X-Request-Id, Content-Length")
+	w.Header().Set("Access-Control-Expose-Headers", diagExposeHeaders)
 	w.Header().Set("X-Request-Id", requestID())
 	w.Header().Set("Content-Length", strconv.Itoa(size))
 
@@ -91,7 +97,7 @@ func (h *DiagHandlers) Upload(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Timing-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Expose-Headers", "Server-Timing, X-Request-Id, Content-Length")
+	w.Header().Set("Access-Control-Expose-Headers", diagExposeHeaders)
 	w.Header().Set("X-Request-Id", requestID)
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"ok":          true,
@@ -221,6 +227,14 @@ func requestID() string {
 		return strconv.FormatInt(time.Now().UnixNano(), 36)
 	}
 	return "req_" + hex.EncodeToString(b[:])
+}
+
+func directPeerIP(remoteAddr string) string {
+	host, _, err := net.SplitHostPort(strings.TrimSpace(remoteAddr))
+	if err == nil {
+		return strings.Trim(host, "[]")
+	}
+	return strings.Trim(strings.TrimSpace(remoteAddr), "[]")
 }
 
 func ContextWithTimeout(parent context.Context, ms int) (context.Context, context.CancelFunc) {

@@ -22,6 +22,7 @@ interface EndpointRunState {
   logs: string[]
   samples: DiagnoseProgressEvent[]
   metrics: LiveMetrics
+  originPeerIPs: string[]
   result?: EndpointResult
 }
 
@@ -253,6 +254,7 @@ function blankState(): EndpointRunState {
     logs: [],
     samples: [],
     metrics: emptyMetrics(),
+    originPeerIPs: [],
   }
 }
 
@@ -279,6 +281,7 @@ function patchState(id: string, update: (state: EndpointRunState) => EndpointRun
 function recordProgress(event: DiagnoseProgressEvent) {
   patchState(event.endpoint_id, (state) => {
     const samples = [...state.samples, event]
+    const originPeerIPs = event.origin_peer_ip ? appendUnique(state.originPeerIPs, event.origin_peer_ip) : state.originPeerIPs
     const status = event.ok ? '成功' : '失败'
     const speed = event.mbps != null ? ` · ${formatMbps(event.mbps)}` : ''
     const latency = event.ttft_ms != null ? ` · TTFT ${formatMs(event.ttft_ms)}` : event.ttfb_ms != null ? ` · TTFB ${formatMs(event.ttfb_ms)}` : ''
@@ -286,6 +289,7 @@ function recordProgress(event: DiagnoseProgressEvent) {
       ...state,
       current: `${event.label} (${event.sample_index}/${event.sample_total})`,
       samples,
+      originPeerIPs,
       metrics: summarizeSamples(samples),
       logs: [`${event.label} ${status}${latency}${speed}`, ...state.logs].slice(0, 8),
     }
@@ -364,6 +368,17 @@ function formatMbps(value: number | null | undefined) {
 
 function pct(value: number | null | undefined) {
   return value == null ? '-' : `${Math.round(value * 100)}%`
+}
+
+function originPeerIPsText(values: string[]): string {
+  if (values.length === 0) return '-'
+  const visible = values.slice(0, 4)
+  const suffix = values.length > visible.length ? ` / +${values.length - visible.length}` : ''
+  return `${visible.join(' / ')}${suffix}`
+}
+
+function appendUnique(values: string[], value: string): string[] {
+  return values.includes(value) ? values : [...values, value]
 }
 
 function statusText(status: RunStatus) {
@@ -610,6 +625,10 @@ function manualEndpointID(value: string): string {
             <div>
               <span class="label">TTFT 平均</span>
               <strong>{{ formatMs(row.state.metrics.avgTTFT) }}</strong>
+            </div>
+            <div>
+              <span class="label">回源连接 IP</span>
+              <strong>{{ originPeerIPsText(row.state.originPeerIPs) }}</strong>
             </div>
             <div v-for="size in sizeLabels" :key="`${row.endpoint.id}-download-${size}`">
               <span class="label">下载 {{ size }}</span>
