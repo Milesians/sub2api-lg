@@ -1,6 +1,6 @@
 .DS_Store
 data/
-server
+/server
 backend/server
 frontend/dist/
 frontend/node_modules/
