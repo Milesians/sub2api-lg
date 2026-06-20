@@ -62,7 +62,7 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodGet && strings.HasPrefix(path, "/report/"):
 		s.serveReport(w, r)
 	case r.Method == http.MethodGet && (path == "/" || path == "/index.html"):
-		http.Redirect(w, r, "./embed", http.StatusFound)
+		http.Redirect(w, r, s.mountedPath("/embed"), http.StatusFound)
 	case r.Method == http.MethodGet && strings.HasPrefix(path, "/assets/"):
 		s.serveAsset(w, r)
 	case r.Method == http.MethodPost && path == "/api/bootstrap":
@@ -487,6 +487,13 @@ func stripRouterPrefix(path, prefix string) string {
 		return "/"
 	}
 	return out
+}
+
+func (s *Server) mountedPath(path string) string {
+	if s.cfg.App.RouterPrefix == "/" {
+		return path
+	}
+	return strings.TrimRight(s.cfg.App.RouterPrefix, "/") + path
 }
 
 func snapshotCount(snapshot *entrypoints.Snapshot) int {

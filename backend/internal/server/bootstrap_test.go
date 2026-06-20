@@ -35,6 +35,34 @@ func TestSrcURLMatchesHost(t *testing.T) {
 	}
 }
 
+func TestRootRedirectPreservesRouterPrefix(t *testing.T) {
+	cfg := config.Default()
+	cfg.App.RouterPrefix = "/lg"
+	cfg.Storage.DSN = filepath.Join(t.TempDir(), "test.db")
+	if err := cfg.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	db, err := store.Open(cfg.Storage.DSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	admin := adminclient.New(cfg)
+	cache := entrypoints.NewCache(cfg, admin)
+	handler := New(cfg, db, cache, probe.NewServerProbe(cfg)).Handler()
+	req := httptest.NewRequest(http.MethodGet, "/lg/", nil)
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+
+	if res.Code != http.StatusFound {
+		t.Fatalf("redirect status = %d, want 302", res.Code)
+	}
+	if location := res.Header().Get("Location"); location != "/lg/embed" {
+		t.Fatalf("redirect location = %q, want /lg/embed", location)
+	}
+}
+
 func TestBootstrapVerifiesSub2APITokenAndUserID(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/user" {
