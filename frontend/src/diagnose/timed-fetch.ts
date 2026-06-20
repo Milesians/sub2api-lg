@@ -15,6 +15,9 @@ export interface TimedFetchOptions {
   method?: 'GET' | 'POST'
   body?: BodyInit
   contentType?: string
+  mode?: RequestMode
+  okOnHTTPResponse?: boolean
+  readBody?: boolean
 }
 
 export async function timedFetch(url: string, timeoutMs: number, options: TimedFetchOptions = {}): Promise<TimedFetchResult> {
@@ -26,6 +29,7 @@ export async function timedFetch(url: string, timeoutMs: number, options: TimedF
   try {
     const res = await fetch(url, {
       method: options.method || 'GET',
+      mode: options.mode,
       cache: 'no-store',
       credentials: 'omit',
       headers: options.contentType ? { 'Content-Type': options.contentType } : undefined,
@@ -33,16 +37,17 @@ export async function timedFetch(url: string, timeoutMs: number, options: TimedF
       signal: controller.signal,
     })
     const firstHeadersAt = performance.now()
-    const body = await res.arrayBuffer()
+    const body = options.readBody === false ? undefined : await res.arrayBuffer()
     const ended = performance.now()
     const timing = getResourceTiming(url)
+    const ok = options.okOnHTTPResponse || res.ok
     return {
-      ok: res.ok,
+      ok,
       status: res.status,
       duration_ms: Math.round(ended - started),
       header_ms: Math.round(firstHeadersAt - started),
-      response_bytes: body.byteLength,
-      error_kind: res.ok ? undefined : 'http_status',
+      response_bytes: body?.byteLength,
+      error_kind: ok ? undefined : 'http_status',
       timing_detail_available: Boolean(timing?.detail_available),
       ttfb_ms: timing?.detail_available ? Math.round(timing.ttfb_ms) : Math.round(firstHeadersAt - started),
       origin_peer_ip: res.headers.get('X-Origin-Peer-IP') || undefined,

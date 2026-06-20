@@ -44,12 +44,16 @@ export interface EntryPoint {
 export interface BrowserSummary {
   success_rate: number
   ping_success_rate?: number
+  endpoint_ping_success_rate?: number
+  origin_ping_success_rate?: number
   http_loss_rate: number
   p50_duration_ms: number | null
   p95_duration_ms: number | null
   p50_ttfb_ms: number | null
   p95_ttfb_ms: number | null
   avg_ping_ms: number | null
+  avg_endpoint_ping_ms?: number | null
+  avg_origin_ping_ms?: number | null
   avg_ttfb_ms: number | null
   avg_ttft_ms: number | null
   jitter_ms: number | null
@@ -100,9 +104,6 @@ export interface ClientTraceInfo {
   checked_at: string
   ips?: TraceIPInfo[]
   avg_ping_ms?: number | null
-  avg_ttfb_ms?: number | null
-  avg_ttft_ms?: number | null
   ping_success_rate?: number | null
-  note?: string
   error?: string
 }

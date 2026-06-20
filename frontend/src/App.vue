@@ -9,6 +9,8 @@ type RunStatus = 'idle' | 'running' | 'done' | 'failed'
 
 interface LiveMetrics {
   successRate: number | null
+  endpointPingSuccessRate: number | null
+  avgEndpointPing: number | null
   pingSuccessRate: number | null
   avgPing: number | null
   avgTTFB: number | null
@@ -64,6 +66,8 @@ const aggregate = computed(() => {
   const states = selectedIds.value.map((id) => endpointState(id)).filter((state) => state.samples.length > 0 || state.result)
   return {
     successRate: averageMetric(states.map((state) => state.metrics.successRate)),
+    endpointPingSuccessRate: averageMetric(states.map((state) => state.metrics.endpointPingSuccessRate)),
+    avgEndpointPing: averageMetric(states.map((state) => state.metrics.avgEndpointPing)),
     pingSuccessRate: averageMetric(states.map((state) => state.metrics.pingSuccessRate)),
     avgPing: averageMetric(states.map((state) => state.metrics.avgPing)),
     avgTTFB: averageMetric(states.map((state) => state.metrics.avgTTFB)),
@@ -292,6 +296,8 @@ function blankState(): EndpointRunState {
 function emptyMetrics(): LiveMetrics {
   return {
     successRate: null,
+    endpointPingSuccessRate: null,
+    avgEndpointPing: null,
     pingSuccessRate: null,
     avgPing: null,
     avgTTFB: null,
@@ -328,15 +334,20 @@ function recordProgress(event: DiagnoseProgressEvent) {
 }
 
 function summarizeSamples(samples: DiagnoseProgressEvent[]): LiveMetrics {
-  const ping = samples.filter((sample) => sample.kind === 'ping' && sample.ok)
-  const pingTotal = samples.filter((sample) => sample.kind === 'ping')
-  const ttfb = samples.filter((sample) => sample.ttfb_ms != null && sample.ok).map((sample) => sample.ttfb_ms as number)
+  const endpointPing = samples.filter((sample) => sample.kind === 'endpoint_ping' && sample.ok)
+  const endpointPingTotal = samples.filter((sample) => sample.kind === 'endpoint_ping')
+  const originPing = samples.filter((sample) => sample.kind === 'origin_ping' && sample.ok)
+  const originPingTotal = samples.filter((sample) => sample.kind === 'origin_ping')
+  const completeSamples = samples.filter((sample) => sample.kind !== 'endpoint_ping')
+  const ttfb = completeSamples.filter((sample) => sample.ttfb_ms != null && sample.ok).map((sample) => sample.ttfb_ms as number)
   const ttft = samples.filter((sample) => sample.ttft_ms != null && sample.ok).map((sample) => sample.ttft_ms as number)
-  const successRate = samples.length > 0 ? samples.filter((sample) => sample.ok).length / samples.length : null
+  const successRate = completeSamples.length > 0 ? completeSamples.filter((sample) => sample.ok).length / completeSamples.length : null
   return {
     successRate,
-    pingSuccessRate: pingTotal.length > 0 ? ping.length / pingTotal.length : null,
-    avgPing: averageMetric(ping.map((sample) => sample.duration_ms ?? null)),
+    endpointPingSuccessRate: endpointPingTotal.length > 0 ? endpointPing.length / endpointPingTotal.length : null,
+    avgEndpointPing: averageMetric(endpointPing.map((sample) => sample.duration_ms ?? null)),
+    pingSuccessRate: originPingTotal.length > 0 ? originPing.length / originPingTotal.length : null,
+    avgPing: averageMetric(originPing.map((sample) => sample.duration_ms ?? null)),
     avgTTFB: averageMetric(ttfb),
     avgTTFT: averageMetric(ttft),
     downloadBySize: speedsByKind(samples, 'download'),
@@ -347,6 +358,8 @@ function summarizeSamples(samples: DiagnoseProgressEvent[]): LiveMetrics {
 function metricsFromResult(result: EndpointResult): LiveMetrics {
   return {
     successRate: result.browser.success_rate,
+    endpointPingSuccessRate: result.browser.endpoint_ping_success_rate ?? null,
+    avgEndpointPing: result.browser.avg_endpoint_ping_ms ?? null,
     pingSuccessRate: result.browser.ping_success_rate ?? result.browser.success_rate,
     avgPing: result.browser.avg_ping_ms,
     avgTTFB: result.browser.avg_ttfb_ms,
@@ -443,13 +456,6 @@ function traceNetworks(trace: ClientTraceInfo | null | undefined): string {
   return Array.from(new Set(names)).join(' / ') || '-'
 }
 
-function traceNote(trace: ClientTraceInfo | null | undefined): string {
-  if (!trace) return '等待测试'
-  if (trace?.error) return trace.error
-  if (trace?.note === 'browser_hop_trace_unavailable') return '浏览器不可获取逐跳 hop'
-  return '-'
-}
-
 function buildManualEndpoint(rawURL: string, rawName: string): EntryPoint {
   const raw = rawURL.trim()
   if (!raw) throw new Error('请输入 endpoint URL')
@@ -528,15 +534,23 @@ function manualEndpointID(value: string): string {
 
       <section class="summary">
         <div>
-          <span class="label">综合成功率</span>
+          <span class="label">完整测试成功率</span>
           <strong>{{ pct(aggregate.successRate) }}</strong>
         </div>
         <div>
-          <span class="label">Ping 成功率</span>
+          <span class="label">端点连通率</span>
+          <strong>{{ pct(aggregate.endpointPingSuccessRate) }}</strong>
+        </div>
+        <div>
+          <span class="label">端点耗时</span>
+          <strong>{{ formatMs(aggregate.avgEndpointPing) }}</strong>
+        </div>
+        <div>
+          <span class="label">源站 Ping 成功率</span>
           <strong>{{ pct(aggregate.pingSuccessRate) }}</strong>
         </div>
         <div>
-          <span class="label">平均 Ping</span>
+          <span class="label">源站 Ping</span>
           <strong>{{ formatMs(aggregate.avgPing) }}</strong>
         </div>
         <div>
@@ -658,17 +672,60 @@ function manualEndpointID(value: string): string {
           <div class="meter">
             <span :style="{ width: `${row.state.samples.length ? Math.round(row.state.samples.length / (row.state.samples[0]?.sample_total || 1) * 100) : 0}%` }"></span>
           </div>
+          <div class="client-trace">
+            <div class="client-trace-head">
+              <strong>客户端 Trace（到端点）</strong>
+              <span>{{ row.state.clientTrace ? '已获取' : '等待测试' }}</span>
+            </div>
+            <div class="route-summary">
+              <div>
+                <span class="label">端点连通率</span>
+                <strong>{{ pct(row.state.metrics.endpointPingSuccessRate) }}</strong>
+              </div>
+              <div>
+                <span class="label">端点耗时</span>
+                <strong>{{ formatMs(row.state.metrics.avgEndpointPing) }}</strong>
+              </div>
+              <div>
+                <span class="label">端点解析 IP</span>
+                <strong>{{ traceIPs(row.state.clientTrace) }}</strong>
+              </div>
+              <div>
+                <span class="label">端点 ASN</span>
+                <strong>{{ traceASNs(row.state.clientTrace) }}</strong>
+              </div>
+              <div>
+                <span class="label">网络归属</span>
+                <strong>{{ traceNetworks(row.state.clientTrace) }}</strong>
+              </div>
+            </div>
+            <div v-if="row.state.clientTrace?.ips?.length" class="trace-table">
+              <div class="trace-row trace-head">
+                <span>IP</span>
+                <span>ASN</span>
+                <span>网络</span>
+                <span>Prefix</span>
+              </div>
+              <div v-for="ip in row.state.clientTrace?.ips" :key="`${row.endpoint.id}-${ip.ip}`" class="trace-row">
+                <span>{{ ip.ip }}</span>
+                <span>{{ asnLabel(ip.asn) }}</span>
+                <span>{{ ip.asn?.name || '-' }}</span>
+                <span>{{ ip.asn?.prefix || '-' }}</span>
+              </div>
+            </div>
+          </div>
+          <div class="section-title">完整测试（通过端点接触源站）</div>
           <div class="metric-grid">
             <div>
-              <span class="label">综合成功率</span>
+              <span class="label">完整测试成功率</span>
               <strong>{{ pct(row.state.metrics.successRate) }}</strong>
             </div>
             <div>
-              <span class="label">Ping 成功率</span>
+              <span class="label">源站 Ping 成功率</span>
               <strong>{{ pct(row.state.metrics.pingSuccessRate) }}</strong>
             </div>
             <div>
-              <span class="label">Ping 平均</span>
+              <span class="label">源站 Ping</span>
               <strong>{{ formatMs(row.state.metrics.avgPing) }}</strong>
             </div>
             <div>
@@ -690,56 +747,6 @@ function manualEndpointID(value: string): string {
             <div v-for="size in sizeLabels" :key="`${row.endpoint.id}-upload-${size}`">
               <span class="label">上传 {{ size }}</span>
               <strong>{{ formatMbps(metricBySize(row.state.metrics.uploadBySize, size)) }}</strong>
-            </div>
-          </div>
-          <div class="client-trace">
-            <div class="client-trace-head">
-              <strong>客户端 Trace</strong>
-              <span>{{ row.state.clientTrace ? '已获取' : '等待测试' }}</span>
-            </div>
-            <div class="route-summary">
-              <div>
-                <span class="label">端点解析 IP</span>
-                <strong>{{ traceIPs(row.state.clientTrace) }}</strong>
-              </div>
-              <div>
-                <span class="label">端点 ASN</span>
-                <strong>{{ traceASNs(row.state.clientTrace) }}</strong>
-              </div>
-              <div>
-                <span class="label">网络归属</span>
-                <strong>{{ traceNetworks(row.state.clientTrace) }}</strong>
-              </div>
-              <div>
-                <span class="label">Ping 平均</span>
-                <strong>{{ formatMs(row.state.clientTrace?.avg_ping_ms) }}</strong>
-              </div>
-              <div>
-                <span class="label">TTFB 平均</span>
-                <strong>{{ formatMs(row.state.clientTrace?.avg_ttfb_ms) }}</strong>
-              </div>
-              <div>
-                <span class="label">TTFT 平均</span>
-                <strong>{{ formatMs(row.state.clientTrace?.avg_ttft_ms) }}</strong>
-              </div>
-              <div>
-                <span class="label">Trace 状态</span>
-                <strong>{{ traceNote(row.state.clientTrace) }}</strong>
-              </div>
-            </div>
-            <div v-if="row.state.clientTrace?.ips?.length" class="trace-table">
-              <div class="trace-row trace-head">
-                <span>IP</span>
-                <span>ASN</span>
-                <span>网络</span>
-                <span>Prefix</span>
-              </div>
-              <div v-for="ip in row.state.clientTrace?.ips" :key="`${row.endpoint.id}-${ip.ip}`" class="trace-row">
-                <span>{{ ip.ip }}</span>
-                <span>{{ asnLabel(ip.asn) }}</span>
-                <span>{{ ip.asn?.name || '-' }}</span>
-                <span>{{ ip.asn?.prefix || '-' }}</span>
-              </div>
             </div>
           </div>
           <ol class="log-list">

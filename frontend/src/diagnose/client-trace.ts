@@ -20,11 +20,8 @@ export async function traceEndpointFromBrowser(endpoint: EntryPoint, browser: Br
     source: 'browser',
     host,
     checked_at: new Date().toISOString(),
-    avg_ping_ms: browser.avg_ping_ms,
-    avg_ttfb_ms: browser.avg_ttfb_ms,
-    avg_ttft_ms: browser.avg_ttft_ms,
-    ping_success_rate: browser.ping_success_rate ?? browser.success_rate,
-    note: 'browser_hop_trace_unavailable',
+    avg_ping_ms: browser.avg_endpoint_ping_ms,
+    ping_success_rate: browser.endpoint_ping_success_rate ?? null,
   }
   if (!host) {
     trace.error = 'empty_host'

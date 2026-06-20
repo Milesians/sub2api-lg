@@ -4,7 +4,7 @@ import { percentile, ratio } from './stats'
 import { timedFetch, type TimedFetchResult } from './timed-fetch'
 import { testDiagStream } from './stream-test'
 
-export type TestKind = 'ping' | 'download' | 'upload' | 'stream'
+export type TestKind = 'endpoint_ping' | 'origin_ping' | 'download' | 'upload' | 'stream'
 
 const minPingSamples = 20
 
@@ -35,22 +35,44 @@ export async function diagnoseEndpoint(
   probe: ProbeConfig,
   onProgress?: (event: DiagnoseProgressEvent) => void,
 ): Promise<EndpointResult> {
-  const pingResults: TimedFetchResult[] = []
+  const endpointPingResults: TimedFetchResult[] = []
+  const originPingResults: TimedFetchResult[] = []
   const downloadResults: SizedFetchResult[] = []
   const uploadResults: SizedFetchResult[] = []
   const sizes = normalizedSizes(probe.blob_sizes)
   const pingSamples = Math.max(probe.browser_repeat, minPingSamples)
-  const totalSteps = pingSamples + sizes.length * 2 + 1
+  const totalSteps = pingSamples * 2 + sizes.length * 2 + 1
   let step = 0
 
   for (let i = 0; i < pingSamples; i += 1) {
-    const result = await timedFetch(withNonce(joinURL(endpoint.lg_base_url, probe.paths.ping)), probe.browser_timeout_ms)
-    pingResults.push(result)
+    const result = await timedFetch(withNonce(endpoint.base_url), probe.browser_timeout_ms, {
+      mode: 'no-cors',
+      okOnHTTPResponse: true,
+      readBody: false,
+    })
+    endpointPingResults.push(result)
     step += 1
     onProgress?.({
       endpoint_id: endpoint.id,
-      kind: 'ping',
-      label: `Ping ${i + 1}/${pingSamples}`,
+      kind: 'endpoint_ping',
+      label: `端点连通 ${i + 1}/${pingSamples}`,
+      ok: result.ok,
+      duration_ms: result.duration_ms,
+      ttfb_ms: result.ttfb_ms ?? null,
+      error_message: result.error_message,
+      sample_index: step,
+      sample_total: totalSteps,
+    })
+  }
+
+  for (let i = 0; i < pingSamples; i += 1) {
+    const result = await timedFetch(withNonce(joinURL(endpoint.lg_base_url, probe.paths.ping)), probe.browser_timeout_ms)
+    originPingResults.push(result)
+    step += 1
+    onProgress?.({
+      endpoint_id: endpoint.id,
+      kind: 'origin_ping',
+      label: `源站 Ping ${i + 1}/${pingSamples}`,
       ok: result.ok,
       duration_ms: result.duration_ms,
       ttfb_ms: result.ttfb_ms ?? null,
@@ -131,17 +153,19 @@ export async function diagnoseEndpoint(
   })
 
   const fetchResults = [
-    ...pingResults,
+    ...originPingResults,
     ...downloadResults.map((item) => item.result),
     ...uploadResults.map((item) => item.result),
   ]
   const totalCount = fetchResults.length + 1
   const successCount = fetchResults.filter((item) => item.ok).length + (stream.ok ? 1 : 0)
-  const pingSuccessCount = pingResults.filter((item) => item.ok).length
-  const durations = pingResults.filter((item) => item.ok).map((item) => item.duration_ms)
-  const ttfbValues = pingResults.filter((item) => item.ok && item.ttfb_ms != null).map((item) => item.ttfb_ms as number)
-  const p50Duration = percentile(durations, 50)
-  const p95Duration = percentile(durations, 95)
+  const endpointPingSuccessCount = endpointPingResults.filter((item) => item.ok).length
+  const originPingSuccessCount = originPingResults.filter((item) => item.ok).length
+  const endpointDurations = endpointPingResults.filter((item) => item.ok).map((item) => item.duration_ms)
+  const originDurations = originPingResults.filter((item) => item.ok).map((item) => item.duration_ms)
+  const ttfbValues = originPingResults.filter((item) => item.ok && item.ttfb_ms != null).map((item) => item.ttfb_ms as number)
+  const p50Duration = percentile(originDurations, 50)
+  const p95Duration = percentile(originDurations, 95)
   const p50TTFB = percentile(ttfbValues, 50)
   const p95TTFB = percentile(ttfbValues, 95)
   const downloadMbps = averageMbps(downloadResults)
@@ -152,13 +176,17 @@ export async function diagnoseEndpoint(
   const uploadBySize = speedBySize(uploadResults)
   const summary: BrowserSummary = {
     success_rate: ratio(successCount, totalCount),
-    ping_success_rate: ratio(pingSuccessCount, pingResults.length),
+    ping_success_rate: ratio(originPingSuccessCount, originPingResults.length),
+    endpoint_ping_success_rate: ratio(endpointPingSuccessCount, endpointPingResults.length),
+    origin_ping_success_rate: ratio(originPingSuccessCount, originPingResults.length),
     http_loss_rate: ratio(totalCount - successCount, totalCount),
     p50_duration_ms: p50Duration,
     p95_duration_ms: p95Duration,
     p50_ttfb_ms: p50TTFB,
     p95_ttfb_ms: p95TTFB,
-    avg_ping_ms: average(durations),
+    avg_ping_ms: average(originDurations),
+    avg_endpoint_ping_ms: average(endpointDurations),
+    avg_origin_ping_ms: average(originDurations),
     avg_ttfb_ms: average(ttfbValues),
     avg_ttft_ms: stream.first_event_ms,
     jitter_ms: p50Duration != null && p95Duration != null ? p95Duration - p50Duration : null,
