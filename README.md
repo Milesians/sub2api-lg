@@ -47,3 +47,12 @@ npm --prefix frontend ci
 npm --prefix frontend run build
 docker build -t sub2api-origin-lg:ci .
 ```
+
+## 镜像发布
+
+push 到 `main` 或手动运行 `Publish Image` workflow 会发布镜像：
+
+```text
+ghcr.io/milesians/sub2api-lg:latest
+ghcr.io/milesians/sub2api-lg:sha-<commit>
+```
