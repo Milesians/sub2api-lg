@@ -1,0 +1,9 @@
+.DS_Store
+.git
+data
+server
+frontend/node_modules
+frontend/dist
+coverage
+*.log
+config.yaml

@@ -1,0 +1,55 @@
+app:
+  listen: "0.0.0.0:8080"
+  public_path: "/lg"
+  router_prefix: "/"
+  public_url: ""
+  env: "production"
+  trust_forwarded_headers: true
+
+security:
+  allowed_parent_origins:
+    - "https://sub2api.example.com"
+  allowed_src_hosts:
+    - "sub2api.example.com"
+  diag_session_secret: "change_this_very_long_random_secret"
+  diag_session_ttl_seconds: 1800
+  allow_http_endpoints: false
+  allow_private_endpoints: false
+
+sub2api:
+  admin_base_url: "https://sub2api.example.com"
+  admin_api_key: "change_this_admin_api_key"
+  settings_path: "/api/v1/admin/settings"
+  userinfo_path: "/api/v1/user"
+  endpoint_cache_ttl_seconds: 60
+
+probe:
+  browser_repeat: 5
+  browser_timeout_ms: 8000
+  server_probe_enabled: true
+  server_repeat: 3
+  server_timeout_ms: 5000
+  enable_icmp: false
+  paths:
+    ping: "/diag/ping"
+    blob: "/diag/blob"
+    stream: "/diag/stream"
+  blob_sizes:
+    - "64k"
+    - "1m"
+  max_blob_size: "1m"
+  allow_5m_blob: false
+  stream:
+    events: 20
+    interval_ms: 200
+    bytes: 32
+
+storage:
+  driver: "sqlite"
+  dsn: "/data/sub2api-origin-lg.db"
+
+fallback:
+  static_endpoints: []
+  # - name: "默认入口"
+  #   base_url: "https://api.example.com/v1"
+  #   description: "fallback"

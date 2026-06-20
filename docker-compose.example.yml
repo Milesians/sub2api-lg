@@ -1,0 +1,41 @@
+version: "3.9"
+
+services:
+  sub2api-origin-lg:
+    build: .
+    image: sub2api-origin-lg:latest
+    container_name: sub2api-origin-lg
+    restart: unless-stopped
+    ports:
+      - "8088:8080"
+    volumes:
+      - ./data:/data
+      - ./config.yaml:/app/config.yaml:ro
+    environment:
+      APP_ENV: "production"
+      APP_LISTEN: "0.0.0.0:8080"
+      APP_PUBLIC_PATH: "/lg"
+      APP_ROUTER_PREFIX: "/"
+      APP_TRUST_FORWARDED_HEADERS: "true"
+      DB_DRIVER: "sqlite"
+      SQLITE_DSN: "/data/sub2api-origin-lg.db"
+      SUB2API_ADMIN_BASE_URL: "https://sub2api.example.com"
+      SUB2API_ADMIN_API_KEY: "change_this_admin_api_key"
+      SUB2API_ENDPOINT_CACHE_TTL_SECONDS: "60"
+      ALLOWED_PARENT_ORIGINS: "https://sub2api.example.com"
+      ALLOWED_SRC_HOSTS: "sub2api.example.com"
+      DIAG_SESSION_SECRET: "change_this_very_long_random_secret"
+      DIAG_SESSION_TTL_SECONDS: "1800"
+      BROWSER_PROBE_REPEAT: "5"
+      BROWSER_PROBE_TIMEOUT_MS: "8000"
+      SERVER_PROBE_ENABLED: "true"
+      SERVER_PROBE_REPEAT: "3"
+      SERVER_PROBE_TIMEOUT_MS: "5000"
+      ENABLE_ICMP: "false"
+    security_opt:
+      - no-new-privileges:true
+
+networks:
+  default:
+    name: sub2api-net
+    external: true
