@@ -16,6 +16,7 @@ export interface DiagnoseProgressEvent {
   ok: boolean
   duration_ms?: number | null
   ttfb_ms?: number | null
+  endpoint_ms?: number | null
   ttft_ms?: number | null
   mbps?: number | null
   origin_peer_ip?: string
@@ -45,6 +46,25 @@ export async function diagnoseEndpoint(
   let step = 0
 
   for (let i = 0; i < pingSamples; i += 1) {
+    const result = await timedFetch(withNonce(joinURL(endpoint.lg_base_url, probe.paths.ping)), probe.browser_timeout_ms)
+    originPingResults.push(result)
+    step += 1
+    onProgress?.({
+      endpoint_id: endpoint.id,
+      kind: 'origin_ping',
+      label: `源站 Ping ${i + 1}/${pingSamples}`,
+      ok: result.ok,
+      duration_ms: result.duration_ms,
+      ttfb_ms: result.ttfb_ms ?? null,
+      endpoint_ms: result.endpoint_ms ?? null,
+      origin_peer_ip: result.origin_peer_ip,
+      error_message: result.error_message,
+      sample_index: step,
+      sample_total: totalSteps,
+    })
+  }
+
+  for (let i = 0; i < pingSamples; i += 1) {
     const result = await timedFetch(withNonce(endpoint.base_url), probe.browser_timeout_ms, {
       mode: 'no-cors',
       okOnHTTPResponse: true,
@@ -57,26 +77,8 @@ export async function diagnoseEndpoint(
       kind: 'endpoint_ping',
       label: `端点连通 ${i + 1}/${pingSamples}`,
       ok: result.ok,
-      duration_ms: result.duration_ms,
-      ttfb_ms: result.ttfb_ms ?? null,
-      error_message: result.error_message,
-      sample_index: step,
-      sample_total: totalSteps,
-    })
-  }
-
-  for (let i = 0; i < pingSamples; i += 1) {
-    const result = await timedFetch(withNonce(joinURL(endpoint.lg_base_url, probe.paths.ping)), probe.browser_timeout_ms)
-    originPingResults.push(result)
-    step += 1
-    onProgress?.({
-      endpoint_id: endpoint.id,
-      kind: 'origin_ping',
-      label: `源站 Ping ${i + 1}/${pingSamples}`,
-      ok: result.ok,
-      duration_ms: result.duration_ms,
-      ttfb_ms: result.ttfb_ms ?? null,
-      origin_peer_ip: result.origin_peer_ip,
+      duration_ms: null,
+      ttfb_ms: null,
       error_message: result.error_message,
       sample_index: step,
       sample_total: totalSteps,
@@ -161,7 +163,7 @@ export async function diagnoseEndpoint(
   const successCount = fetchResults.filter((item) => item.ok).length + (stream.ok ? 1 : 0)
   const endpointPingSuccessCount = endpointPingResults.filter((item) => item.ok).length
   const originPingSuccessCount = originPingResults.filter((item) => item.ok).length
-  const endpointDurations = endpointPingResults.filter((item) => item.ok).map((item) => item.duration_ms)
+  const endpointDurations = originPingResults.filter((item) => item.ok && item.endpoint_ms != null).map((item) => item.endpoint_ms as number)
   const originDurations = originPingResults.filter((item) => item.ok).map((item) => item.duration_ms)
   const ttfbValues = originPingResults.filter((item) => item.ok && item.ttfb_ms != null).map((item) => item.ttfb_ms as number)
   const p50Duration = percentile(originDurations, 50)

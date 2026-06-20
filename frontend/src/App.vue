@@ -345,7 +345,7 @@ function summarizeSamples(samples: DiagnoseProgressEvent[]): LiveMetrics {
   return {
     successRate,
     endpointPingSuccessRate: endpointPingTotal.length > 0 ? endpointPing.length / endpointPingTotal.length : null,
-    avgEndpointPing: averageMetric(endpointPing.map((sample) => sample.duration_ms ?? null)),
+    avgEndpointPing: averageMetric(originPing.map((sample) => sample.endpoint_ms ?? null)),
     pingSuccessRate: originPingTotal.length > 0 ? originPing.length / originPingTotal.length : null,
     avgPing: averageMetric(originPing.map((sample) => sample.duration_ms ?? null)),
     avgTTFB: averageMetric(ttfb),
@@ -542,7 +542,7 @@ function manualEndpointID(value: string): string {
           <strong>{{ pct(aggregate.endpointPingSuccessRate) }}</strong>
         </div>
         <div>
-          <span class="label">端点耗时</span>
+          <span class="label">端点连接耗时</span>
           <strong>{{ formatMs(aggregate.avgEndpointPing) }}</strong>
         </div>
         <div>
@@ -683,7 +683,7 @@ function manualEndpointID(value: string): string {
                 <strong>{{ pct(row.state.metrics.endpointPingSuccessRate) }}</strong>
               </div>
               <div>
-                <span class="label">端点耗时</span>
+                <span class="label">端点连接耗时</span>
                 <strong>{{ formatMs(row.state.metrics.avgEndpointPing) }}</strong>
               </div>
               <div>
