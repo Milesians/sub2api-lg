@@ -3,18 +3,27 @@ app:
   public_path: "/lg"
   router_prefix: "/"
   public_url: ""
+  admin_public_url: "https://sub2api.example.com/lg"
   env: "production"
   trust_forwarded_headers: true
 
 security:
   allowed_parent_origins:
     - "https://sub2api.example.com"
+  allowed_customer_parent_origins:
+    - "https://sub2api.example.com"
+  allowed_admin_parent_origins:
+    - "https://sub2api.example.com"
   allowed_src_hosts:
+    - "sub2api.example.com"
+  allowed_admin_hosts:
     - "sub2api.example.com"
   diag_session_secret: "change_this_very_long_random_secret"
   diag_session_ttl_seconds: 1800
   allow_http_endpoints: false
   allow_private_endpoints: false
+  allow_legacy_customer_token: true
+  customer_report_share_enabled: true
 
 sub2api:
   admin_base_url: "https://sub2api.example.com"

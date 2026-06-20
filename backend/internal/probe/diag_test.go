@@ -9,7 +9,7 @@ import (
 	"sub2api-origin-lg/backend/internal/config"
 )
 
-func TestPingSetsOriginPeerIP(t *testing.T) {
+func TestPingDoesNotExposeOriginPeerIP(t *testing.T) {
 	handler := NewDiagHandlers(config.Default())
 	req := httptest.NewRequest(http.MethodGet, "/diag/ping", nil)
 	req.RemoteAddr = "203.0.113.10:443"
@@ -17,11 +17,11 @@ func TestPingSetsOriginPeerIP(t *testing.T) {
 
 	handler.Ping(res, req)
 
-	if got := res.Header().Get("X-Origin-Peer-IP"); got != "203.0.113.10" {
-		t.Fatalf("X-Origin-Peer-IP = %q, want 203.0.113.10", got)
+	if got := res.Header().Get("X-Origin-Peer-IP"); got != "" {
+		t.Fatalf("X-Origin-Peer-IP = %q, want empty", got)
 	}
-	if got := res.Header().Get("Access-Control-Expose-Headers"); !strings.Contains(got, "X-Origin-Peer-IP") {
-		t.Fatalf("Access-Control-Expose-Headers = %q, want X-Origin-Peer-IP", got)
+	if got := res.Header().Get("Access-Control-Expose-Headers"); strings.Contains(got, "X-Origin-Peer-IP") {
+		t.Fatalf("Access-Control-Expose-Headers = %q, should not expose X-Origin-Peer-IP", got)
 	}
 }
 
@@ -36,8 +36,11 @@ func TestPingTrustsProxyPeerIPFromLocalProxy(t *testing.T) {
 
 	handler.Ping(res, req)
 
-	if got := res.Header().Get("X-Origin-Peer-IP"); got != "198.51.100.23" {
-		t.Fatalf("X-Origin-Peer-IP = %q, want 198.51.100.23", got)
+	if got := handler.originPeerIP(req); got != "198.51.100.23" {
+		t.Fatalf("originPeerIP = %q, want 198.51.100.23", got)
+	}
+	if got := res.Header().Get("X-Origin-Peer-IP"); got != "" {
+		t.Fatalf("X-Origin-Peer-IP = %q, want empty", got)
 	}
 }
 
@@ -52,8 +55,11 @@ func TestPingIgnoresSpoofedProxyPeerIPFromPublicPeer(t *testing.T) {
 
 	handler.Ping(res, req)
 
-	if got := res.Header().Get("X-Origin-Peer-IP"); got != "203.0.113.10" {
-		t.Fatalf("X-Origin-Peer-IP = %q, want 203.0.113.10", got)
+	if got := handler.originPeerIP(req); got != "203.0.113.10" {
+		t.Fatalf("originPeerIP = %q, want 203.0.113.10", got)
+	}
+	if got := res.Header().Get("X-Origin-Peer-IP"); got != "" {
+		t.Fatalf("X-Origin-Peer-IP = %q, want empty", got)
 	}
 }
 

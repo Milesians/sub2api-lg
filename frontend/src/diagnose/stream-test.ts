@@ -10,6 +10,7 @@ export interface StreamResult {
   stream_buffered: boolean
   error_kind?: 'timeout' | 'network_error'
   error_message?: string
+  request_id?: string
 }
 
 export async function testDiagStream(url: string, timeoutMs: number): Promise<StreamResult> {
@@ -28,6 +29,7 @@ export async function testDiagStream(url: string, timeoutMs: number): Promise<St
       signal: controller.signal,
     })
     if (!res.body) throw new Error('response body is empty')
+    const requestID = res.headers.get('X-Request-Id') || undefined
     const reader = res.body.getReader()
     const decoder = new TextDecoder()
 
@@ -57,6 +59,7 @@ export async function testDiagStream(url: string, timeoutMs: number): Promise<St
       done_seen: doneSeen,
       stream_interrupted: !doneSeen,
       stream_buffered: detectBuffered(events, started, ended),
+      request_id: requestID,
     }
   } catch (e) {
     const error = e as Error

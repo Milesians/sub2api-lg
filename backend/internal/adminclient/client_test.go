@@ -21,15 +21,17 @@ func TestParseUser(t *testing.T) {
 }
 
 func TestParseAdminUserFromSub2APIRole(t *testing.T) {
-	user, err := parseUser([]byte(`{"id":"123","username":"demo","role":"admin"}`))
-	if err != nil {
-		t.Fatalf("parseUser: %v", err)
-	}
-	if user.Role != "admin" {
-		t.Fatalf("role = %q, want admin", user.Role)
-	}
-	if !user.IsAdmin {
-		t.Fatal("is_admin = false, want true")
+	for _, role := range []string{"admin", "root", "owner"} {
+		user, err := parseUser([]byte(`{"id":"123","username":"demo","role":"` + role + `"}`))
+		if err != nil {
+			t.Fatalf("parseUser: %v", err)
+		}
+		if user.Role != role {
+			t.Fatalf("role = %q, want %s", user.Role, role)
+		}
+		if !user.IsAdmin {
+			t.Fatalf("role %s is_admin = false, want true", role)
+		}
 	}
 }
 
@@ -38,7 +40,6 @@ func TestParseUserDoesNotGuessAdminFromOtherFields(t *testing.T) {
 		`{"id":"123","username":"demo","is_admin":true}`,
 		`{"id":"123","username":"demo","isAdmin":true}`,
 		`{"id":"123","username":"demo","admin":true}`,
-		`{"id":"123","username":"demo","role":"root"}`,
 		`{"id":"123","username":"demo","role":"super_admin"}`,
 	}
 	for _, body := range cases {

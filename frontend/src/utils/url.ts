@@ -12,9 +12,11 @@ export function apiURL(path: string): string {
   const current = window.location.pathname
   const reportIndex = current.indexOf('/report/')
   const embedIndex = current.indexOf('/embed')
+  const adminIndex = current.indexOf('/admin')
   let prefix = ''
   if (reportIndex >= 0) prefix = current.slice(0, reportIndex)
   if (embedIndex >= 0) prefix = current.slice(0, embedIndex)
+  if (adminIndex >= 0) prefix = current.slice(0, adminIndex)
   return `${prefix}/api${normalized}`.replace(/\/+/g, '/')
 }
 

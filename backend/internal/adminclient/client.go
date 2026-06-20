@@ -167,7 +167,7 @@ func parseUserObject(body []byte) (*User, error) {
 		Email:    maskEmail(stringValue(raw, "email")),
 		Role:     strings.ToLower(strings.TrimSpace(stringValue(raw, "role"))),
 	}
-	user.IsAdmin = user.Role == "admin"
+	user.IsAdmin = user.Role == "admin" || user.Role == "root" || user.Role == "owner"
 	return user, nil
 }
 

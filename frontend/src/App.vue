@@ -1,9 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { bootstrap, getCloudflareTrace, getEntrypoints, getReport, iframeContext, submitReport } from './api/client'
-import { asnLabel, traceEndpointFromBrowser, traceIPFromBrowser } from './diagnose/client-trace'
+import { adminBootstrap, bootstrap, getAdminReport, getEntrypointInventory, getEntrypoints, getReport, listAdminReports, submitReport } from './api/client'
 import { buildReport, diagnoseEndpoint, type DiagnoseProgressEvent } from './diagnose/runner'
-import type { BootstrapResponse, ClientTraceInfo, EndpointResult, EntryPoint, TraceIPInfo } from './types'
+import type { BootstrapResponse, EndpointResult, EntryPoint } from './types'
 
 type RunStatus = 'idle' | 'running' | 'done' | 'failed'
 
@@ -25,9 +24,6 @@ interface EndpointRunState {
   logs: string[]
   samples: DiagnoseProgressEvent[]
   metrics: LiveMetrics
-  originPeerIPs: string[]
-  originPeerTrace: TraceIPInfo[]
-  clientTrace?: ClientTraceInfo | null
   result?: EndpointResult
 }
 
@@ -36,7 +32,6 @@ const running = ref(false)
 const error = ref('')
 const boot = ref<BootstrapResponse | null>(null)
 const backendEntrypoints = ref<EntryPoint[]>([])
-const manualEndpoints = ref<EntryPoint[]>([])
 const selectedIds = ref<string[]>([])
 const runStates = ref<Record<string, EndpointRunState>>({})
 const results = ref<EndpointResult[]>([])
@@ -44,14 +39,18 @@ const reportId = ref('')
 const shareURL = ref('')
 const reportJSON = ref<unknown>(null)
 const progress = ref('')
-const cfTrace = ref<Record<string, string> | null>(null)
-const manualName = ref('')
-const manualURL = ref('')
+const adminReports = ref<any[]>([])
+const adminTotal = ref(0)
+const adminReportDetail = ref<any | null>(null)
+const adminInventory = ref<any | null>(null)
+const adminReportIdFilter = ref('')
+const adminUserFilter = ref('')
 
 const isReportPage = computed(() => window.location.pathname.includes('/report/'))
+const isAdminPage = computed(() => window.location.pathname.includes('/admin'))
 const token = computed(() => boot.value?.session_token || sessionStorage.getItem('sub2api_lg_session_token') || '')
-const isAdmin = computed(() => boot.value?.user?.role === 'admin')
-const entrypoints = computed(() => [...backendEntrypoints.value, ...manualEndpoints.value])
+const adminToken = computed(() => boot.value?.session_token || sessionStorage.getItem('sub2api_lg_admin_session_token') || '')
+const entrypoints = computed(() => backendEntrypoints.value)
 const best = computed(() => [...results.value].sort((a, b) => b.browser.success_rate - a.browser.success_rate)[0])
 const rows = computed(() => entrypoints.value.map((endpoint) => ({
   endpoint,
@@ -84,10 +83,13 @@ onMounted(async () => {
       await loadReportPage()
       return
     }
+    if (isAdminPage.value) {
+      await loadAdminPage()
+      return
+    }
     boot.value = await bootstrap()
     backendEntrypoints.value = boot.value.entrypoints || []
     selectAllEndpoints()
-    void loadCloudflareTrace()
   } catch (e) {
     error.value = String((e as Error)?.message || e)
   } finally {
@@ -117,6 +119,7 @@ async function run() {
     await loadLatestEntrypoints(true)
     const endpoints = [...selectedEndpoints.value]
     if (endpoints.length === 0) throw new Error('没有端点可测试')
+    const runID = `run_${crypto.randomUUID()}`
     for (const endpoint of endpoints) {
       setState(endpoint.id, {
         ...blankState(),
@@ -133,16 +136,12 @@ async function run() {
         logs: ['准备测试'],
       }))
       try {
-        const result = await diagnoseEndpoint(endpoint, boot.value.probe, (event) => recordProgress(event))
-        result.origin_trace = await diagnoseOriginPeerTrace(endpoint.id)
-        const clientTrace = await diagnoseClientTrace(endpoint, result)
-        result.client_trace = clientTrace
+        const result = await diagnoseEndpoint(endpoint, boot.value.probe, runID, (event) => recordProgress(event))
         results.value.push(result)
         patchState(endpoint.id, (state) => ({
           ...state,
           status: 'done',
           current: '完成',
-          clientTrace,
           result,
           metrics: metricsFromResult(result),
           logs: [`完成，成功率 ${pct(result.browser.success_rate)}`, ...state.logs].slice(0, 8),
@@ -158,73 +157,16 @@ async function run() {
       }
     }
     if (results.value.length === 0) throw new Error('没有端点完成测试')
-    const payload = buildReport(results.value, iframeContext())
+    const payload = buildReport(runID, allSamples())
     const saved = await submitReport(token.value, payload)
     reportId.value = saved.report_id
     shareURL.value = saved.share_url
-    notifyParent(payload.summary)
+    notifyParent(saved.customer_summary)
   } catch (e) {
     error.value = String((e as Error)?.message || e)
   } finally {
     progress.value = ''
     running.value = false
-  }
-}
-
-async function loadCloudflareTrace() {
-  cfTrace.value = await getCloudflareTrace()
-}
-
-async function diagnoseOriginPeerTrace(endpointID: string): Promise<TraceIPInfo[]> {
-  const ips = endpointState(endpointID).originPeerIPs
-  if (ips.length === 0) return []
-  patchState(endpointID, (state) => ({
-    ...state,
-    current: '回源 ASN 查询中',
-    logs: ['回源 ASN 查询中', ...state.logs].slice(0, 8),
-  }))
-  const traced = await Promise.all(ips.map(async (ip) => {
-    try {
-      return await traceIPFromBrowser(ip)
-    } catch {
-      return { ip, asn: null }
-    }
-  }))
-  patchState(endpointID, (state) => ({
-    ...state,
-    originPeerTrace: traced,
-    logs: [`回源 ASN 查询完成：${traced.length} 个 IP`, ...state.logs].slice(0, 8),
-  }))
-  return traced
-}
-
-async function diagnoseClientTrace(endpoint: EntryPoint, result: EndpointResult): Promise<ClientTraceInfo | null> {
-  patchState(endpoint.id, (state) => ({
-    ...state,
-    current: '客户端 Trace 中',
-    logs: ['客户端 Trace 中', ...state.logs].slice(0, 8),
-  }))
-  try {
-    const clientTrace = await traceEndpointFromBrowser(endpoint, result.browser)
-    patchState(endpoint.id, (state) => ({
-      ...state,
-      clientTrace,
-      logs: [`客户端 Trace 完成：${clientTrace.ips?.length || 0} 个 IP`, ...state.logs].slice(0, 8),
-    }))
-    return clientTrace
-  } catch (e) {
-    const clientTrace: ClientTraceInfo = {
-      source: 'browser',
-      host: endpoint.host,
-      checked_at: new Date().toISOString(),
-      error: String((e as Error)?.message || e),
-    }
-    patchState(endpoint.id, (state) => ({
-      ...state,
-      clientTrace,
-      logs: [`客户端 Trace 失败：${clientTrace.error}`, ...state.logs].slice(0, 8),
-    }))
-    return clientTrace
   }
 }
 
@@ -239,8 +181,34 @@ async function loadReportPage() {
   reportJSON.value = await getReport(id)
 }
 
+async function loadAdminPage() {
+  boot.value = await adminBootstrap()
+  await Promise.all([refreshAdminReports(), loadAdminInventory()])
+}
+
+async function refreshAdminReports() {
+  if (!adminToken.value) return
+  const params: Record<string, string> = {}
+  if (adminReportIdFilter.value.trim()) params.report_id = adminReportIdFilter.value.trim()
+  if (adminUserFilter.value.trim()) params.user_id = adminUserFilter.value.trim()
+  const body = await listAdminReports(adminToken.value, params)
+  adminReports.value = body.items || []
+  adminTotal.value = body.total || 0
+}
+
+async function openAdminReport(reportID: string) {
+  if (!adminToken.value || !reportID) return
+  adminReportDetail.value = await getAdminReport(adminToken.value, reportID)
+}
+
+async function loadAdminInventory() {
+  if (!adminToken.value) return
+  adminInventory.value = await getEntrypointInventory(adminToken.value)
+}
+
 function notifyParent(summary: any) {
-  const srcURL = iframeContext().src_url
+  const params = new URLSearchParams(window.location.search)
+  const srcURL = params.get('src_url') || ''
   if (!srcURL) return
   let parentOrigin = ''
   try {
@@ -251,9 +219,13 @@ function notifyParent(summary: any) {
   window.parent.postMessage({
     type: 'sub2api-lg:completed',
     report_id: reportId.value,
-    score: summary.score,
-    best_endpoint_id: summary.best_endpoint_id,
+    score: summary?.score,
+    level: summary?.level,
   }, parentOrigin)
+}
+
+function allSamples(): DiagnoseProgressEvent[] {
+  return Object.values(runStates.value).flatMap((state) => state.samples)
 }
 
 function clearRun() {
@@ -281,28 +253,6 @@ function toggleEndpoint(id: string, event: Event) {
     : selectedIds.value.filter((item) => item !== id)
 }
 
-function addManualEndpoint() {
-  if (!isAdmin.value || running.value) return
-  error.value = ''
-  try {
-    const endpoint = buildManualEndpoint(manualURL.value, manualName.value)
-    const exists = entrypoints.value.some((item) => item.base_url === endpoint.base_url || item.lg_base_url === endpoint.lg_base_url)
-    if (exists) throw new Error('该 endpoint 已存在')
-    manualEndpoints.value = [...manualEndpoints.value, endpoint]
-    selectedIds.value = Array.from(new Set([...selectedIds.value, endpoint.id]))
-    manualName.value = ''
-    manualURL.value = ''
-  } catch (e) {
-    error.value = String((e as Error)?.message || e)
-  }
-}
-
-function removeManualEndpoint(id: string) {
-  if (running.value) return
-  manualEndpoints.value = manualEndpoints.value.filter((endpoint) => endpoint.id !== id)
-  selectedIds.value = selectedIds.value.filter((item) => item !== id)
-}
-
 function endpointState(id: string): EndpointRunState {
   return runStates.value[id] || blankState()
 }
@@ -314,8 +264,6 @@ function blankState(): EndpointRunState {
     logs: [],
     samples: [],
     metrics: emptyMetrics(),
-    originPeerIPs: [],
-    originPeerTrace: [],
   }
 }
 
@@ -344,8 +292,6 @@ function patchState(id: string, update: (state: EndpointRunState) => EndpointRun
 function recordProgress(event: DiagnoseProgressEvent) {
   patchState(event.endpoint_id, (state) => {
     const samples = [...state.samples, event]
-    const originPeerIPs = event.origin_peer_ip ? appendUnique(state.originPeerIPs, event.origin_peer_ip) : state.originPeerIPs
-    const originPeerTrace = event.origin_peer_ip ? appendTraceIP(state.originPeerTrace, event.origin_peer_ip) : state.originPeerTrace
     const status = event.ok ? '成功' : '失败'
     const speed = event.mbps != null ? ` · ${formatMbps(event.mbps)}` : ''
     const latency = event.ttft_ms != null ? ` · TTFT ${formatMs(event.ttft_ms)}` : event.ttfb_ms != null ? ` · TTFB ${formatMs(event.ttfb_ms)}` : ''
@@ -353,8 +299,6 @@ function recordProgress(event: DiagnoseProgressEvent) {
       ...state,
       current: `${event.label} (${event.sample_index}/${event.sample_total})`,
       samples,
-      originPeerIPs,
-      originPeerTrace,
       metrics: summarizeSamples(samples),
       logs: [`${event.label} ${status}${latency}${speed}`, ...state.logs].slice(0, 8),
     }
@@ -362,17 +306,15 @@ function recordProgress(event: DiagnoseProgressEvent) {
 }
 
 function summarizeSamples(samples: DiagnoseProgressEvent[]): LiveMetrics {
-  const endpointPing = samples.filter((sample) => sample.kind === 'endpoint_ping' && sample.ok)
-  const endpointPingTotal = samples.filter((sample) => sample.kind === 'endpoint_ping')
   const originPing = samples.filter((sample) => sample.kind === 'origin_ping' && sample.ok)
   const originPingTotal = samples.filter((sample) => sample.kind === 'origin_ping')
-  const completeSamples = samples.filter((sample) => sample.kind !== 'endpoint_ping')
+  const completeSamples = samples
   const ttfb = completeSamples.filter((sample) => sample.ttfb_ms != null && sample.ok).map((sample) => sample.ttfb_ms as number)
   const ttft = samples.filter((sample) => sample.ttft_ms != null && sample.ok).map((sample) => sample.ttft_ms as number)
   const successRate = completeSamples.length > 0 ? completeSamples.filter((sample) => sample.ok).length / completeSamples.length : null
   return {
     successRate,
-    endpointPingSuccessRate: endpointPingTotal.length > 0 ? endpointPing.length / endpointPingTotal.length : null,
+    endpointPingSuccessRate: null,
     avgEndpointPing: averageMetric(originPing.map((sample) => sample.endpoint_ms ?? null)),
     pingSuccessRate: originPingTotal.length > 0 ? originPing.length / originPingTotal.length : null,
     avgPing: averageMetric(originPing.map((sample) => sample.duration_ms ?? null)),
@@ -386,8 +328,8 @@ function summarizeSamples(samples: DiagnoseProgressEvent[]): LiveMetrics {
 function metricsFromResult(result: EndpointResult): LiveMetrics {
   return {
     successRate: result.browser.success_rate,
-    endpointPingSuccessRate: result.browser.endpoint_ping_success_rate ?? null,
-    avgEndpointPing: result.browser.avg_endpoint_ping_ms ?? null,
+    endpointPingSuccessRate: null,
+    avgEndpointPing: result.browser.avg_origin_ping_ms ?? null,
     pingSuccessRate: result.browser.ping_success_rate ?? result.browser.success_rate,
     avgPing: result.browser.avg_ping_ms,
     avgTTFB: result.browser.avg_ttfb_ms,
@@ -442,14 +384,6 @@ function pct(value: number | null | undefined) {
   return value == null ? '-' : `${Math.round(value * 100)}%`
 }
 
-function appendUnique(values: string[], value: string): string[] {
-  return values.includes(value) ? values : [...values, value]
-}
-
-function appendTraceIP(values: TraceIPInfo[], ip: string): TraceIPInfo[] {
-  return values.some((item) => item.ip === ip) ? values : [...values, { ip }]
-}
-
 function statusText(status: RunStatus) {
   if (status === 'running') return '测试中'
   if (status === 'done') return '完成'
@@ -462,52 +396,6 @@ function normalizeSizes(sizes: string[]): string[] {
   return out.length > 0 ? out : ['64k', '1m', '5m', '20m']
 }
 
-function traceValue(key: string): string {
-  return cfTrace.value?.[key] || '-'
-}
-
-function buildManualEndpoint(rawURL: string, rawName: string): EntryPoint {
-  const raw = rawURL.trim()
-  if (!raw) throw new Error('请输入 endpoint URL')
-  const input = raw.includes('://') ? raw : `https://${raw}`
-  const parsed = new URL(input)
-  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
-    throw new Error('endpoint 只支持 http 或 https')
-  }
-  parsed.search = ''
-  parsed.hash = ''
-  const publicPath = boot.value?.app.public_path || '/lg'
-  let basePath = parsed.pathname.replace(/\/+$/, '')
-  if (basePath === publicPath || basePath.endsWith(publicPath)) {
-    basePath = basePath.slice(0, -publicPath.length).replace(/\/+$/, '')
-  }
-  parsed.pathname = basePath || '/'
-  const baseURL = parsed.toString().replace(/\/+$/, '')
-  const lgBaseURL = `${baseURL}${publicPath}`
-  const name = rawName.trim() || parsed.hostname
-  return {
-    id: manualEndpointID(baseURL),
-    source: 'manual',
-    name,
-    description: 'manual endpoint',
-    raw_value: raw,
-    base_url: baseURL,
-    public_path: publicPath,
-    lg_base_url: lgBaseURL,
-    origin: parsed.origin,
-    host: parsed.host,
-    scheme: parsed.protocol.replace(':', ''),
-    enabled: true,
-  }
-}
-
-function manualEndpointID(value: string): string {
-  let hash = 0
-  for (let i = 0; i < value.length; i += 1) {
-    hash = ((hash << 5) - hash + value.charCodeAt(i)) | 0
-  }
-  return `manual_${Math.abs(hash).toString(36)}`
-}
 </script>
 
 <template>
@@ -523,10 +411,69 @@ function manualEndpointID(value: string): string {
       <pre class="json">{{ JSON.stringify(reportJSON, null, 2) }}</pre>
       <p v-if="error" class="error">{{ error }}</p>
     </section>
+    <section v-else-if="isAdminPage" class="stack">
+      <header class="toolbar">
+        <div>
+          <h1>管理员排障</h1>
+          <p>{{ adminTotal }} 份报告 · {{ adminInventory?.valid_count ?? 0 }} 个有效入口</p>
+        </div>
+        <div class="actions">
+          <button @click="refreshAdminReports">刷新</button>
+        </div>
+      </header>
+      <form class="filter-bar" @submit.prevent="refreshAdminReports">
+        <input v-model="adminReportIdFilter" placeholder="报告 ID">
+        <input v-model="adminUserFilter" placeholder="用户 ID">
+        <button class="primary" type="submit">查询</button>
+      </form>
+      <p v-if="error" class="error">{{ error }}</p>
+      <section class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>报告</th>
+              <th>时间</th>
+              <th>用户</th>
+              <th>等级</th>
+              <th>分数</th>
+              <th>推荐入口</th>
+              <th>问题代码</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="item in adminReports" :key="item.report_id">
+              <td>{{ item.report_id }}</td>
+              <td>{{ item.created_at }}</td>
+              <td>{{ item.user_id || '-' }}</td>
+              <td><span :class="['badge', item.level]">{{ item.level }}</span></td>
+              <td>{{ item.score }}</td>
+              <td>{{ item.best_endpoint_name || '-' }}</td>
+              <td>{{ (item.problem_codes || []).join(', ') || '-' }}</td>
+              <td><button @click="openAdminReport(item.report_id)">查看</button></td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+      <section v-if="adminReportDetail" class="selector-panel">
+        <div class="panel-head">
+          <h2>报告详情</h2>
+          <span>{{ adminReportDetail.report_id }}</span>
+        </div>
+        <pre class="json">{{ JSON.stringify(adminReportDetail, null, 2) }}</pre>
+      </section>
+      <section v-if="adminInventory" class="selector-panel">
+        <div class="panel-head">
+          <h2>入口 Inventory</h2>
+          <span>{{ adminInventory.source || '-' }}</span>
+        </div>
+        <pre class="json">{{ JSON.stringify(adminInventory, null, 2) }}</pre>
+      </section>
+    </section>
     <section v-else class="stack">
       <header class="toolbar">
         <div>
-          <h1>源站入口性能诊断</h1>
+          <h1>入口访问诊断</h1>
           <p>{{ entrypoints.length }} 个入口 · 已选 {{ selectedEndpoints.length }} 个 · {{ boot?.entrypoint_source || '未获取' }}</p>
         </div>
         <div class="actions">
@@ -548,19 +495,11 @@ function manualEndpointID(value: string): string {
           <strong>{{ pct(aggregate.successRate) }}</strong>
         </div>
         <div>
-          <span class="label">端点连通率</span>
-          <strong>{{ pct(aggregate.endpointPingSuccessRate) }}</strong>
-        </div>
-        <div>
-          <span class="label">端点连接耗时</span>
-          <strong>{{ formatMs(aggregate.avgEndpointPing) }}</strong>
-        </div>
-        <div>
-          <span class="label">源站 Ping 成功率</span>
+          <span class="label">诊断接口成功率</span>
           <strong>{{ pct(aggregate.pingSuccessRate) }}</strong>
         </div>
         <div>
-          <span class="label">源站 Ping</span>
+          <span class="label">诊断接口延迟</span>
           <strong>{{ formatMs(aggregate.avgPing) }}</strong>
         </div>
         <div>
@@ -581,45 +520,11 @@ function manualEndpointID(value: string): string {
         </div>
       </section>
 
-      <section v-if="cfTrace" class="selector-panel">
-        <div class="panel-head">
-          <h2>Cloudflare Trace</h2>
-          <span>{{ traceValue('h') }}</span>
-        </div>
-        <div class="metric-grid trace-grid">
-          <div>
-            <span class="label">边缘节点</span>
-            <strong>{{ traceValue('colo') }}</strong>
-          </div>
-          <div>
-            <span class="label">访问地区</span>
-            <strong>{{ traceValue('loc') }}</strong>
-          </div>
-          <div>
-            <span class="label">HTTP/TLS</span>
-            <strong>{{ traceValue('http') }} / {{ traceValue('tls') }}</strong>
-          </div>
-          <div>
-            <span class="label">WARP</span>
-            <strong>{{ traceValue('warp') }}</strong>
-          </div>
-          <div>
-            <span class="label">SNI</span>
-            <strong>{{ traceValue('sni') }}</strong>
-          </div>
-        </div>
-      </section>
-
       <section class="selector-panel">
         <div class="panel-head">
           <h2>选择端点</h2>
           <span>{{ selectedEndpoints.length }}/{{ entrypoints.length }}</span>
         </div>
-        <form v-if="isAdmin" class="manual-endpoint" @submit.prevent="addManualEndpoint">
-          <input v-model="manualName" :disabled="running" placeholder="名称">
-          <input v-model="manualURL" :disabled="running" placeholder="https://example.com">
-          <button :disabled="running" type="submit">添加测试端点</button>
-        </form>
         <div class="endpoint-grid">
           <label
             v-for="row in rows"
@@ -634,18 +539,9 @@ function manualEndpointID(value: string): string {
             >
             <span class="endpoint-main">
               <strong>{{ row.endpoint.name }}</strong>
-              <span>{{ row.endpoint.lg_base_url }}</span>
+              <span>{{ row.endpoint.description || '浏览器诊断入口' }}</span>
             </span>
             <span :class="['run-status', row.state.status]">{{ statusText(row.state.status) }}</span>
-            <button
-              v-if="row.endpoint.source === 'manual'"
-              class="icon-button"
-              :disabled="running"
-              type="button"
-              @click.prevent.stop="removeManualEndpoint(row.endpoint.id)"
-            >
-              移除
-            </button>
           </label>
         </div>
       </section>
@@ -674,7 +570,7 @@ function manualEndpointID(value: string): string {
           <header class="card-head">
             <div>
               <h2>{{ row.endpoint.name }}</h2>
-              <p>{{ row.endpoint.lg_base_url }}</p>
+              <p>{{ row.endpoint.description || '浏览器诊断入口' }}</p>
             </div>
             <span :class="['run-status', row.state.status]">{{ statusText(row.state.status) }}</span>
           </header>
@@ -682,69 +578,17 @@ function manualEndpointID(value: string): string {
           <div class="meter">
             <span :style="{ width: `${row.state.samples.length ? Math.round(row.state.samples.length / (row.state.samples[0]?.sample_total || 1) * 100) : 0}%` }"></span>
           </div>
-          <div class="client-trace">
-            <div class="client-trace-head">
-              <strong>客户端 Trace（到端点）</strong>
-              <span>{{ row.state.clientTrace ? '已获取' : '等待测试' }}</span>
-            </div>
-            <div class="route-summary">
-              <div>
-                <span class="label">端点连通率</span>
-                <strong>{{ pct(row.state.metrics.endpointPingSuccessRate) }}</strong>
-              </div>
-              <div>
-                <span class="label">端点连接耗时</span>
-                <strong>{{ formatMs(row.state.metrics.avgEndpointPing) }}</strong>
-              </div>
-            </div>
-            <div v-if="row.state.clientTrace?.ips?.length" class="trace-table">
-              <div class="trace-row trace-head">
-                <span>IP</span>
-                <span>ASN</span>
-                <span>网络</span>
-                <span>Prefix</span>
-              </div>
-              <div v-for="ip in row.state.clientTrace?.ips" :key="`${row.endpoint.id}-${ip.ip}`" class="trace-row">
-                <span>{{ ip.ip }}</span>
-                <span>{{ asnLabel(ip.asn) }}</span>
-                <span>{{ ip.asn?.name || '-' }}</span>
-                <span>{{ ip.asn?.prefix || '-' }}</span>
-              </div>
-            </div>
-          </div>
-          <div class="section-title">完整测试（通过端点接触源站）</div>
-          <div class="client-trace origin-trace">
-            <div class="client-trace-head">
-              <strong>回源连接 IP（端点到源站）</strong>
-              <span>{{ row.state.originPeerTrace.length ? `${row.state.originPeerTrace.length} 个 IP` : '等待数据' }}</span>
-            </div>
-            <div v-if="row.state.originPeerTrace.length" class="trace-table">
-              <div class="trace-row trace-head">
-                <span>IP</span>
-                <span>ASN</span>
-                <span>运营商</span>
-                <span>Prefix</span>
-              </div>
-              <div v-for="ip in row.state.originPeerTrace" :key="`${row.endpoint.id}-origin-${ip.ip}`" class="trace-row">
-                <span>{{ ip.ip }}</span>
-                <span>{{ asnLabel(ip.asn) }}</span>
-                <span>{{ ip.asn?.name || '-' }}</span>
-                <span>{{ ip.asn?.prefix || '-' }}</span>
-              </div>
-            </div>
-            <div v-else class="trace-empty">等待源站 Ping 返回回源连接 IP</div>
-          </div>
           <div class="metric-grid">
             <div>
               <span class="label">完整测试成功率</span>
               <strong>{{ pct(row.state.metrics.successRate) }}</strong>
             </div>
             <div>
-              <span class="label">源站 Ping 成功率</span>
+              <span class="label">诊断接口成功率</span>
               <strong>{{ pct(row.state.metrics.pingSuccessRate) }}</strong>
             </div>
             <div>
-              <span class="label">源站 Ping</span>
+              <span class="label">诊断接口延迟</span>
               <strong>{{ formatMs(row.state.metrics.avgPing) }}</strong>
             </div>
             <div>

@@ -14,6 +14,7 @@ go run ./backend/cmd/server
 
 ```text
 http://localhost:8080/embed
+http://localhost:8080/admin
 ```
 
 生产环境建议把外部 `{base_url}{public_path}` strip prefix 后转发到容器根路径。如果网关不能 strip prefix，设置 `APP_ROUTER_PREFIX` 为容器实际收到的路径前缀。
@@ -25,16 +26,44 @@ http://localhost:8080/embed
 ```text
 APP_PUBLIC_PATH=/lg
 APP_ROUTER_PREFIX=/
+APP_ADMIN_PUBLIC_URL=https://sub2api.example.com/lg
 SUB2API_ADMIN_BASE_URL=https://sub2api.example.com
 SUB2API_ADMIN_API_KEY=...
 ALLOWED_PARENT_ORIGINS=https://sub2api.example.com
+ALLOWED_CUSTOMER_PARENT_ORIGINS=https://sub2api.example.com
+ALLOWED_ADMIN_PARENT_ORIGINS=https://sub2api.example.com
 ALLOWED_SRC_HOSTS=sub2api.example.com
+ALLOWED_ADMIN_HOSTS=sub2api.example.com
 SQLITE_DSN=/data/sub2api-origin-lg.db
 ```
 
-`/diag/*` 只返回诊断数据并允许跨入口访问；`/api/*` 除 bootstrap 外都需要 `Authorization: Bearer {session_token}`。
+`/diag/*` 只返回诊断数据并允许跨入口访问，不向浏览器暴露 `X-Origin-Peer-IP`。`/api/*` 除 bootstrap 和分享读取外都需要 `Authorization: Bearer {session_token}`。
 
-`/api/bootstrap` 会使用 iframe 传入的 `token` 调用 `SUB2API_ADMIN_BASE_URL + SUB2API_USERINFO_PATH` 校验用户身份，并要求返回的用户 ID 与 iframe 的 `user_id` 完全一致；未配置 sub2api 用户校验时不会创建诊断 session。
+`/api/customer/bootstrap` 会使用 iframe 传入的 `ticket`，或兼容旧版 `token`，调用 `SUB2API_ADMIN_BASE_URL + SUB2API_USERINFO_PATH` 校验用户身份，并要求返回的用户 ID 与 iframe 的 `user_id` 完全一致；未配置 sub2api 用户校验时不会创建诊断 session。`/api/bootstrap` 保留为客户 bootstrap 兼容入口。
+
+客户报告接口：
+
+```text
+GET  /embed
+POST /api/customer/bootstrap
+GET  /api/customer/entrypoints
+POST /api/customer/reports
+GET  /api/customer/reports/{id}?share_token=...
+GET  /report/{id}?share_token=...
+```
+
+管理员接口：
+
+```text
+GET  /admin
+POST /api/admin/bootstrap
+GET  /api/admin/reports
+GET  /api/admin/reports/{id}
+GET  /api/admin/reports/{id}/events
+GET  /api/admin/entrypoints/inventory
+```
+
+`/api/reports/{id}` 仅保留兼容读取，返回脱敏后的 `customer_report`，不再返回内部 payload。
 
 ## 构建校验
 

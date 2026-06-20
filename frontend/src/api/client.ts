@@ -5,17 +5,19 @@ export function iframeContext(): Record<string, string> {
   const params = new URLSearchParams(window.location.search)
   return {
     user_id: params.get('user_id') || '',
+    ticket: params.get('ticket') || '',
     token: params.get('token') || '',
+    legacy_token: params.get('legacy_token') || params.get('token') || '',
     theme: params.get('theme') || '',
     lang: params.get('lang') || '',
-    ui_mode: params.get('ui_mode') || 'embedded',
+    ui_mode: params.get('ui_mode') || (window.location.pathname.includes('/admin') ? 'admin' : 'customer'),
     src_host: params.get('src_host') || '',
     src_url: params.get('src_url') || '',
   }
 }
 
 export async function bootstrap(): Promise<BootstrapResponse> {
-  const res = await fetch(apiURL('/bootstrap'), {
+  const res = await fetch(apiURL('/customer/bootstrap'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     cache: 'no-store',
@@ -28,8 +30,22 @@ export async function bootstrap(): Promise<BootstrapResponse> {
   return body
 }
 
+export async function adminBootstrap(): Promise<BootstrapResponse> {
+  const res = await fetch(apiURL('/admin/bootstrap'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    cache: 'no-store',
+    body: JSON.stringify(iframeContext()),
+  })
+  if (!res.ok) throw new Error(`admin bootstrap failed: ${res.status}`)
+  const body = await res.json()
+  sessionStorage.setItem('sub2api_lg_admin_session_token', body.session_token)
+  cleanTokenFromURL()
+  return body
+}
+
 export async function getEntrypoints(token: string) {
-  const res = await fetch(apiURL('/entrypoints'), {
+  const res = await fetch(apiURL('/customer/entrypoints'), {
     headers: { Authorization: `Bearer ${token}` },
     cache: 'no-store',
   })
@@ -37,25 +53,8 @@ export async function getEntrypoints(token: string) {
   return res.json()
 }
 
-export async function getCloudflareTrace(): Promise<Record<string, string> | null> {
-  const ctx = iframeContext()
-  const origins = uniqueOrigins([ctx.src_url, ctx.src_host, window.location.origin])
-  for (const origin of origins) {
-    try {
-      const res = await fetch(`${origin}/cdn-cgi/trace`, { cache: 'no-store' })
-      if (!res.ok) continue
-      const parsed = parseTrace(await res.text())
-      delete parsed.ip
-      if (parsed.colo || parsed.fl) return parsed
-    } catch {
-      // Cross-origin or non-Cloudflare hosts are expected; just hide this panel.
-    }
-  }
-  return null
-}
-
-export async function submitReport(token: string, payload: unknown): Promise<{ report_id: string; share_url: string }> {
-  const res = await fetch(apiURL('/reports'), {
+export async function submitReport(token: string, payload: unknown): Promise<{ report_id: string; share_url: string; customer_summary?: any }> {
+  const res = await fetch(apiURL('/customer/reports'), {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
     cache: 'no-store',
@@ -66,50 +65,49 @@ export async function submitReport(token: string, payload: unknown): Promise<{ r
 }
 
 export async function getReport(reportId: string) {
-  const res = await fetch(apiURL(`/reports/${encodeURIComponent(reportId)}`), {
+  const current = new URL(window.location.href)
+  const shareToken = current.searchParams.get('share_token')
+  const path = `/customer/reports/${encodeURIComponent(reportId)}${shareToken ? `?share_token=${encodeURIComponent(shareToken)}` : ''}`
+  const res = await fetch(apiURL(path), {
     cache: 'no-store',
   })
   if (!res.ok) throw new Error(`report fetch failed: ${res.status}`)
   return res.json()
 }
 
+export async function listAdminReports(token: string, params: Record<string, string> = {}) {
+  const query = new URLSearchParams(params)
+  const suffix = query.toString() ? `?${query.toString()}` : ''
+  const res = await fetch(apiURL(`/admin/reports${suffix}`), {
+    headers: { Authorization: `Bearer ${token}` },
+    cache: 'no-store',
+  })
+  if (!res.ok) throw new Error(`admin reports failed: ${res.status}`)
+  return res.json()
+}
+
+export async function getAdminReport(token: string, reportId: string) {
+  const res = await fetch(apiURL(`/admin/reports/${encodeURIComponent(reportId)}`), {
+    headers: { Authorization: `Bearer ${token}` },
+    cache: 'no-store',
+  })
+  if (!res.ok) throw new Error(`admin report failed: ${res.status}`)
+  return res.json()
+}
+
+export async function getEntrypointInventory(token: string) {
+  const res = await fetch(apiURL('/admin/entrypoints/inventory'), {
+    headers: { Authorization: `Bearer ${token}` },
+    cache: 'no-store',
+  })
+  if (!res.ok) throw new Error(`entrypoint inventory failed: ${res.status}`)
+  return res.json()
+}
+
 function cleanTokenFromURL() {
   const url = new URL(window.location.href)
-  if (!url.searchParams.has('token')) return
-  url.searchParams.delete('token')
+  const keys = ['token', 'ticket', 'legacy_token']
+  if (!keys.some((key) => url.searchParams.has(key))) return
+  for (const key of keys) url.searchParams.delete(key)
   window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`)
-}
-
-function uniqueOrigins(values: string[]): string[] {
-  const out: string[] = []
-  for (const value of values) {
-    const origin = toOrigin(value)
-    if (origin && !out.includes(origin)) out.push(origin)
-  }
-  return out
-}
-
-function toOrigin(value: string): string {
-  const trimmed = value.trim()
-  if (!trimmed) return ''
-  try {
-    if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
-      return new URL(trimmed).origin
-    }
-    return new URL(`https://${trimmed}`).origin
-  } catch {
-    return ''
-  }
-}
-
-function parseTrace(text: string): Record<string, string> {
-  const out: Record<string, string> = {}
-  for (const line of text.split('\n')) {
-    const index = line.indexOf('=')
-    if (index <= 0) continue
-    const key = line.slice(0, index).trim()
-    const value = line.slice(index + 1).trim()
-    if (key) out[key] = value
-  }
-  return out
 }

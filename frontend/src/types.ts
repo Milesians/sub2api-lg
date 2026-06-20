@@ -1,7 +1,9 @@
 export interface BootstrapResponse {
   session_id: string
   session_token: string
+  session_type?: 'customer' | 'admin'
   user: { id?: string; username?: string; email?: string; role?: string }
+  display_user?: { id?: string; name?: string }
   app: { public_path: string; iframe_origin: string; theme?: string; lang?: string }
   probe: ProbeConfig
   entrypoint_count: number
@@ -28,23 +30,28 @@ export interface ProbeConfig {
 
 export interface EntryPoint {
   id: string
-  source: string
+  endpoint_public_id?: string
+  source?: string
   name: string
   description: string
-  raw_value: string
-  base_url: string
-  public_path: string
-  lg_base_url: string
-  origin: string
-  host: string
-  scheme: string
-  enabled: boolean
+  display_name?: string
+  display_order?: number
+  probe_base_url?: string
+  raw_value?: string
+  base_url?: string
+  public_path?: string
+  lg_base_url?: string
+  origin?: string
+  host?: string
+  scheme?: string
+  enabled?: boolean
+  capabilities?: string[]
 }
 
 export interface BrowserSummary {
   success_rate: number
   ping_success_rate?: number
-  endpoint_ping_success_rate?: number
+  opaque_smoke_success_rate?: number
   origin_ping_success_rate?: number
   http_loss_rate: number
   p50_duration_ms: number | null
@@ -52,7 +59,7 @@ export interface BrowserSummary {
   p50_ttfb_ms: number | null
   p95_ttfb_ms: number | null
   avg_ping_ms: number | null
-  avg_endpoint_ping_ms?: number | null
+  avg_opaque_smoke_ms?: number | null
   avg_origin_ping_ms?: number | null
   avg_ttfb_ms: number | null
   avg_ttft_ms: number | null
@@ -75,36 +82,9 @@ export interface BrowserSummary {
 
 export interface EndpointResult {
   endpoint_id: string
+  endpoint_public_id?: string
   name: string
-  base_url: string
-  lg_base_url: string
   browser: BrowserSummary
-  client_trace?: ClientTraceInfo | null
-  origin_trace?: TraceIPInfo[]
   level: 'good' | 'warning' | 'bad'
   recommendation: string
-}
-
-export interface ASNInfo {
-  asn?: string
-  prefix?: string
-  cc?: string
-  registry?: string
-  allocated?: string
-  name?: string
-}
-
-export interface TraceIPInfo {
-  ip: string
-  asn?: ASNInfo | null
-}
-
-export interface ClientTraceInfo {
-  source: 'browser'
-  host: string
-  checked_at: string
-  ips?: TraceIPInfo[]
-  avg_ping_ms?: number | null
-  ping_success_rate?: number | null
-  error?: string
 }

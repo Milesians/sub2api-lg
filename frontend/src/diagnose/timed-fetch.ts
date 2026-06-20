@@ -12,7 +12,7 @@ export interface TimedFetchResult {
   dns_ms?: number | null
   connect_ms?: number | null
   tls_ms?: number | null
-  origin_peer_ip?: string
+  request_id?: string
 }
 
 export interface TimedFetchOptions {
@@ -28,7 +28,6 @@ export async function timedFetch(url: string, timeoutMs: number, options: TimedF
   const controller = new AbortController()
   const timer = window.setTimeout(() => controller.abort(), timeoutMs)
   const started = performance.now()
-  performance.clearResourceTimings()
 
   try {
     const res = await fetch(url, {
@@ -58,7 +57,7 @@ export async function timedFetch(url: string, timeoutMs: number, options: TimedF
       dns_ms: timing?.dns_ms ?? null,
       connect_ms: timing?.connect_ms ?? null,
       tls_ms: timing?.tls_ms ?? null,
-      origin_peer_ip: res.headers.get('X-Origin-Peer-IP') || undefined,
+      request_id: res.headers.get('X-Request-Id') || undefined,
     }
   } catch (e) {
     const error = e as Error

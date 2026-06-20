@@ -27,18 +27,24 @@ type AppConfig struct {
 	PublicPath            string `yaml:"public_path" json:"public_path"`
 	RouterPrefix          string `yaml:"router_prefix" json:"router_prefix"`
 	PublicURL             string `yaml:"public_url" json:"public_url"`
+	AdminPublicURL        string `yaml:"admin_public_url" json:"admin_public_url"`
 	Env                   string `yaml:"env" json:"env"`
 	TrustForwardedHeaders bool   `yaml:"trust_forwarded_headers" json:"trust_forwarded_headers"`
 }
 
 type SecurityConfig struct {
-	AllowedParentOrigins  []string      `yaml:"allowed_parent_origins" json:"allowed_parent_origins"`
-	AllowedSrcHosts       []string      `yaml:"allowed_src_hosts" json:"allowed_src_hosts"`
-	DiagSessionSecret     string        `yaml:"diag_session_secret" json:"-"`
-	DiagSessionTTLSeconds int           `yaml:"diag_session_ttl_seconds" json:"diag_session_ttl_seconds"`
-	AllowHTTPEndpoints    bool          `yaml:"allow_http_endpoints" json:"allow_http_endpoints"`
-	AllowPrivateEndpoints bool          `yaml:"allow_private_endpoints" json:"allow_private_endpoints"`
-	SessionTTL            time.Duration `yaml:"-" json:"-"`
+	AllowedParentOrigins         []string      `yaml:"allowed_parent_origins" json:"allowed_parent_origins"`
+	AllowedCustomerParentOrigins []string      `yaml:"allowed_customer_parent_origins" json:"allowed_customer_parent_origins"`
+	AllowedAdminParentOrigins    []string      `yaml:"allowed_admin_parent_origins" json:"allowed_admin_parent_origins"`
+	AllowedSrcHosts              []string      `yaml:"allowed_src_hosts" json:"allowed_src_hosts"`
+	AllowedAdminHosts            []string      `yaml:"allowed_admin_hosts" json:"allowed_admin_hosts"`
+	DiagSessionSecret            string        `yaml:"diag_session_secret" json:"-"`
+	DiagSessionTTLSeconds        int           `yaml:"diag_session_ttl_seconds" json:"diag_session_ttl_seconds"`
+	AllowHTTPEndpoints           bool          `yaml:"allow_http_endpoints" json:"allow_http_endpoints"`
+	AllowPrivateEndpoints        bool          `yaml:"allow_private_endpoints" json:"allow_private_endpoints"`
+	AllowLegacyCustomerToken     bool          `yaml:"allow_legacy_customer_token" json:"allow_legacy_customer_token"`
+	CustomerReportShareEnabled   bool          `yaml:"customer_report_share_enabled" json:"customer_report_share_enabled"`
+	SessionTTL                   time.Duration `yaml:"-" json:"-"`
 }
 
 type Sub2APIConfig struct {
@@ -115,7 +121,9 @@ func Default() *Config {
 			TrustForwardedHeaders: true,
 		},
 		Security: SecurityConfig{
-			DiagSessionTTLSeconds: 1800,
+			DiagSessionTTLSeconds:      1800,
+			AllowLegacyCustomerToken:   true,
+			CustomerReportShareEnabled: true,
 		},
 		Sub2API: Sub2APIConfig{
 			SettingsPath:            "/api/v1/admin/settings",
@@ -251,15 +259,21 @@ func applyEnv(c *Config) {
 	setString(&c.App.PublicPath, "APP_PUBLIC_PATH")
 	setString(&c.App.RouterPrefix, "APP_ROUTER_PREFIX")
 	setString(&c.App.PublicURL, "APP_PUBLIC_URL")
+	setString(&c.App.AdminPublicURL, "APP_ADMIN_PUBLIC_URL")
 	setString(&c.App.Env, "APP_ENV")
 	setBool(&c.App.TrustForwardedHeaders, "APP_TRUST_FORWARDED_HEADERS")
 
 	setCSV(&c.Security.AllowedParentOrigins, "ALLOWED_PARENT_ORIGINS")
+	setCSV(&c.Security.AllowedCustomerParentOrigins, "ALLOWED_CUSTOMER_PARENT_ORIGINS")
+	setCSV(&c.Security.AllowedAdminParentOrigins, "ALLOWED_ADMIN_PARENT_ORIGINS")
 	setCSV(&c.Security.AllowedSrcHosts, "ALLOWED_SRC_HOSTS")
+	setCSV(&c.Security.AllowedAdminHosts, "ALLOWED_ADMIN_HOSTS")
 	setString(&c.Security.DiagSessionSecret, "DIAG_SESSION_SECRET")
 	setInt(&c.Security.DiagSessionTTLSeconds, "DIAG_SESSION_TTL_SECONDS")
 	setBool(&c.Security.AllowHTTPEndpoints, "ALLOW_HTTP_ENDPOINTS")
 	setBool(&c.Security.AllowPrivateEndpoints, "ALLOW_PRIVATE_ENDPOINTS")
+	setBool(&c.Security.AllowLegacyCustomerToken, "ALLOW_LEGACY_CUSTOMER_TOKEN")
+	setBool(&c.Security.CustomerReportShareEnabled, "CUSTOMER_REPORT_SHARE_ENABLED")
 
 	setString(&c.Sub2API.AdminBaseURL, "SUB2API_ADMIN_BASE_URL")
 	setString(&c.Sub2API.AdminAPIKey, "SUB2API_ADMIN_API_KEY")

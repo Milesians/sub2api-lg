@@ -147,6 +147,57 @@ func TestReportPayloadSanitization(t *testing.T) {
 	}
 }
 
+func TestBuildReportsKeepsURLsOutOfCustomerReport(t *testing.T) {
+	now := time.Now()
+	session := &store.Session{ID: "sess_1", UserID: "user_1"}
+	snapshot := &entrypoints.Snapshot{
+		Entrypoints: []entrypoints.EntryPoint{{
+			ID:        "ep_1",
+			Name:      "默认入口",
+			RawValue:  "https://raw.example.com",
+			BaseURL:   "https://api.example.com",
+			LGBaseURL: "https://api.example.com/lg",
+			Host:      "api.example.com",
+			Source:    "admin_default",
+		}},
+	}
+	req := customerReportRequest{
+		RunID: "run_1",
+		ClientEnv: map[string]string{
+			"browser":  "Chrome",
+			"timezone": "Asia/Shanghai",
+			"language": "zh-CN",
+		},
+		Samples: []customerSample{{
+			EndpointPublicID:      "ep_1",
+			Kind:                  "origin_ping",
+			RequestID:             "req_1",
+			OK:                    true,
+			DurationMS:            floatPtr(120),
+			TTFBMS:                floatPtr(60),
+			TimingDetailAvailable: true,
+		}},
+	}
+	customerReport, internalReport, _, _ := buildReports("rpt_1", session, req, snapshot, now)
+	customerJSON, err := json.Marshal(customerReport)
+	if err != nil {
+		t.Fatal(err)
+	}
+	customerText := string(customerJSON)
+	for _, forbidden := range []string{"base_url", "lg_base_url", "raw_value", "api.example.com"} {
+		if strings.Contains(customerText, forbidden) {
+			t.Fatalf("customer_report contains %q: %s", forbidden, customerText)
+		}
+	}
+	internalJSON, err := json.Marshal(internalReport)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(internalJSON), "https://api.example.com/lg") {
+		t.Fatalf("internal_report should keep lg_base_url: %s", string(internalJSON))
+	}
+}
+
 func TestExpiredReportIsNotReturned(t *testing.T) {
 	cfg := config.Default()
 	cfg.Storage.DSN = filepath.Join(t.TempDir(), "test.db")
@@ -244,4 +295,8 @@ func postBootstrap(handler http.Handler, body []byte) *httptest.ResponseRecorder
 	res := httptest.NewRecorder()
 	handler.ServeHTTP(res, req)
 	return res
+}
+
+func floatPtr(value float64) *float64 {
+	return &value
 }

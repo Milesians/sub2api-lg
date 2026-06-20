@@ -4,12 +4,13 @@ import { percentile, ratio } from './stats'
 import { timedFetch, type TimedFetchResult } from './timed-fetch'
 import { testDiagStream } from './stream-test'
 
-export type TestKind = 'endpoint_ping' | 'origin_ping' | 'download' | 'upload' | 'stream'
+export type TestKind = 'origin_ping' | 'download' | 'upload' | 'stream'
 
 const minPingSamples = 20
 
 export interface DiagnoseProgressEvent {
   endpoint_id: string
+  endpoint_public_id: string
   kind: TestKind
   label: string
   size?: string
@@ -19,8 +20,11 @@ export interface DiagnoseProgressEvent {
   endpoint_ms?: number | null
   ttft_ms?: number | null
   mbps?: number | null
-  origin_peer_ip?: string
+  request_id?: string
   error_message?: string
+  error_kind?: string
+  timing_detail_available?: boolean
+  stream_buffered?: boolean
   sample_index: number
   sample_total: number
 }
@@ -34,75 +38,62 @@ interface SizedFetchResult {
 export async function diagnoseEndpoint(
   endpoint: EntryPoint,
   probe: ProbeConfig,
+  runID: string,
   onProgress?: (event: DiagnoseProgressEvent) => void,
 ): Promise<EndpointResult> {
-  const endpointPingResults: TimedFetchResult[] = []
   const originPingResults: TimedFetchResult[] = []
   const downloadResults: SizedFetchResult[] = []
   const uploadResults: SizedFetchResult[] = []
   const sizes = normalizedSizes(probe.blob_sizes)
   const pingSamples = Math.max(probe.browser_repeat, minPingSamples)
-  const totalSteps = pingSamples * 2 + sizes.length * 2 + 1
+  const endpointPublicID = endpoint.endpoint_public_id || endpoint.id
+  const probeBaseURL = endpoint.probe_base_url || endpoint.lg_base_url || ''
+  const totalSteps = pingSamples + sizes.length * 2 + 1
   let step = 0
 
   for (let i = 0; i < pingSamples; i += 1) {
-    const result = await timedFetch(withNonce(joinURL(endpoint.lg_base_url, probe.paths.ping)), probe.browser_timeout_ms)
+    const result = await timedFetch(diagURL(probeBaseURL, probe.paths.ping, runID, endpointPublicID), probe.browser_timeout_ms)
     originPingResults.push(result)
     step += 1
     onProgress?.({
       endpoint_id: endpoint.id,
+      endpoint_public_id: endpointPublicID,
       kind: 'origin_ping',
-      label: `源站 Ping ${i + 1}/${pingSamples}`,
+      label: `诊断 Ping ${i + 1}/${pingSamples}`,
       ok: result.ok,
+      request_id: result.request_id,
       duration_ms: result.duration_ms,
       ttfb_ms: result.ttfb_ms ?? null,
       endpoint_ms: result.endpoint_ms ?? null,
-      origin_peer_ip: result.origin_peer_ip,
       error_message: result.error_message,
-      sample_index: step,
-      sample_total: totalSteps,
-    })
-  }
-
-  for (let i = 0; i < pingSamples; i += 1) {
-    const result = await timedFetch(withNonce(endpoint.base_url), probe.browser_timeout_ms, {
-      mode: 'no-cors',
-      okOnHTTPResponse: true,
-      readBody: false,
-    })
-    endpointPingResults.push(result)
-    step += 1
-    onProgress?.({
-      endpoint_id: endpoint.id,
-      kind: 'endpoint_ping',
-      label: `端点连通 ${i + 1}/${pingSamples}`,
-      ok: result.ok,
-      duration_ms: null,
-      ttfb_ms: null,
-      error_message: result.error_message,
+      error_kind: result.error_kind,
+      timing_detail_available: Boolean(result.timing_detail_available),
       sample_index: step,
       sample_total: totalSteps,
     })
   }
 
   for (const size of sizes) {
-    const url = new URL(joinURL(endpoint.lg_base_url, probe.paths.blob))
+    const url = new URL(diagURL(probeBaseURL, probe.paths.blob, runID, endpointPublicID))
     url.searchParams.set('size', size)
-    url.searchParams.set('nonce', crypto.randomUUID())
     const result = await timedFetch(url.toString(), probe.browser_timeout_ms)
     const bytes = result.response_bytes || sizeToBytes(size)
     downloadResults.push({ size, bytes, result })
     step += 1
     onProgress?.({
       endpoint_id: endpoint.id,
+      endpoint_public_id: endpointPublicID,
       kind: 'download',
       label: `下载 ${size}`,
       size,
       ok: result.ok,
+      request_id: result.request_id,
       duration_ms: result.duration_ms,
       ttfb_ms: result.ttfb_ms ?? null,
       mbps: mbps(bytes, result.duration_ms, result.ok),
       error_message: result.error_message,
+      error_kind: result.error_kind,
+      timing_detail_available: Boolean(result.timing_detail_available),
       sample_index: step,
       sample_total: totalSteps,
     })
@@ -110,9 +101,8 @@ export async function diagnoseEndpoint(
 
   for (const size of sizes) {
     const bytes = sizeToBytes(size)
-    const url = new URL(joinURL(endpoint.lg_base_url, probe.paths.upload || '/diag/upload'))
+    const url = new URL(diagURL(probeBaseURL, probe.paths.upload || '/diag/upload', runID, endpointPublicID))
     url.searchParams.set('size', size)
-    url.searchParams.set('nonce', crypto.randomUUID())
     const result = await timedFetch(url.toString(), probe.browser_timeout_ms, {
       method: 'POST',
       body: payload(bytes),
@@ -122,34 +112,41 @@ export async function diagnoseEndpoint(
     step += 1
     onProgress?.({
       endpoint_id: endpoint.id,
+      endpoint_public_id: endpointPublicID,
       kind: 'upload',
       label: `上传 ${size}`,
       size,
       ok: result.ok,
+      request_id: result.request_id,
       duration_ms: result.duration_ms,
       ttfb_ms: result.ttfb_ms ?? null,
       mbps: mbps(bytes, result.duration_ms, result.ok),
       error_message: result.error_message,
+      error_kind: result.error_kind,
+      timing_detail_available: Boolean(result.timing_detail_available),
       sample_index: step,
       sample_total: totalSteps,
     })
   }
 
-  const streamURL = new URL(joinURL(endpoint.lg_base_url, probe.paths.stream))
+  const streamURL = new URL(diagURL(probeBaseURL, probe.paths.stream, runID, endpointPublicID))
   streamURL.searchParams.set('events', String(probe.stream.events))
   streamURL.searchParams.set('interval_ms', String(probe.stream.interval_ms))
   streamURL.searchParams.set('bytes', String(probe.stream.bytes))
-  streamURL.searchParams.set('nonce', crypto.randomUUID())
   const stream = await testDiagStream(streamURL.toString(), probe.browser_timeout_ms + probe.stream.events * probe.stream.interval_ms + 1000)
   step += 1
   onProgress?.({
     endpoint_id: endpoint.id,
+    endpoint_public_id: endpointPublicID,
     kind: 'stream',
     label: '流式 TTFT',
     ok: stream.ok,
+    request_id: stream.request_id,
     duration_ms: stream.total_ms,
     ttft_ms: stream.first_event_ms,
     error_message: stream.error_message,
+    error_kind: stream.error_kind,
+    stream_buffered: stream.stream_buffered,
     sample_index: step,
     sample_total: totalSteps,
   })
@@ -161,7 +158,6 @@ export async function diagnoseEndpoint(
   ]
   const totalCount = fetchResults.length + 1
   const successCount = fetchResults.filter((item) => item.ok).length + (stream.ok ? 1 : 0)
-  const endpointPingSuccessCount = endpointPingResults.filter((item) => item.ok).length
   const originPingSuccessCount = originPingResults.filter((item) => item.ok).length
   const endpointDurations = originPingResults.filter((item) => item.ok && item.endpoint_ms != null).map((item) => item.endpoint_ms as number)
   const originDurations = originPingResults.filter((item) => item.ok).map((item) => item.duration_ms)
@@ -179,7 +175,6 @@ export async function diagnoseEndpoint(
   const summary: BrowserSummary = {
     success_rate: ratio(successCount, totalCount),
     ping_success_rate: ratio(originPingSuccessCount, originPingResults.length),
-    endpoint_ping_success_rate: ratio(endpointPingSuccessCount, endpointPingResults.length),
     origin_ping_success_rate: ratio(originPingSuccessCount, originPingResults.length),
     http_loss_rate: ratio(totalCount - successCount, totalCount),
     p50_duration_ms: p50Duration,
@@ -187,7 +182,6 @@ export async function diagnoseEndpoint(
     p50_ttfb_ms: p50TTFB,
     p95_ttfb_ms: p95TTFB,
     avg_ping_ms: average(originDurations),
-    avg_endpoint_ping_ms: average(endpointDurations),
     avg_origin_ping_ms: average(originDurations),
     avg_ttfb_ms: average(ttfbValues),
     avg_ttft_ms: stream.first_event_ms,
@@ -211,35 +205,51 @@ export async function diagnoseEndpoint(
   const level = scoreLevel(summary)
   return {
     endpoint_id: endpoint.id,
+    endpoint_public_id: endpointPublicID,
     name: endpoint.name,
-    base_url: endpoint.base_url,
-    lg_base_url: endpoint.lg_base_url,
     browser: summary,
     level,
     recommendation: recommendation(level, summary),
   }
 }
 
-export function buildReport(results: EndpointResult[], iframeContext: Record<string, string>) {
-  const best = [...results].sort(compareResults)[0]
+export function buildReport(runID: string, samples: DiagnoseProgressEvent[]) {
   return {
-    iframe_context: {
-      theme: iframeContext.theme,
-      lang: iframeContext.lang,
-      ui_mode: iframeContext.ui_mode,
-      src_host: iframeContext.src_host,
-      src_url: iframeContext.src_url,
-    },
-    summary: {
-      entrypoint_count: results.length,
-      best_endpoint_id: best?.endpoint_id || null,
-      best_endpoint_name: best?.name || null,
-      score: best ? scoreNumber(best.browser) : 0,
-      level: best?.level || 'bad',
-      main_problem: best ? mainProblem(best.browser) : '没有可用入口',
-      recommendation: best ? best.recommendation : '请检查入口配置和诊断路径转发。',
-    },
-    entrypoints: results,
+    schema_version: '2.0',
+    run_id: runID,
+    client_env: clientEnv(),
+    samples: samples.map((sample) => ({
+      endpoint_public_id: sample.endpoint_public_id,
+      kind: sample.kind,
+      request_id: sample.request_id,
+      size: sample.size,
+      ok: sample.ok,
+      duration_ms: sample.duration_ms ?? null,
+      ttfb_ms: sample.ttfb_ms ?? null,
+      ttft_ms: sample.ttft_ms ?? null,
+      endpoint_ms: sample.endpoint_ms ?? null,
+      mbps: sample.mbps ?? null,
+      error_kind: sample.error_kind,
+      error_message: sample.error_message,
+      timing_detail_available: Boolean(sample.timing_detail_available),
+      stream_buffered: Boolean(sample.stream_buffered),
+    })),
+  }
+}
+
+function diagURL(base: string, path: string, runID: string, endpointPublicID: string): string {
+  const url = new URL(withNonce(joinURL(base, path)))
+  url.searchParams.set('run_id', runID)
+  url.searchParams.set('endpoint_public_id', endpointPublicID)
+  return url.toString()
+}
+
+function clientEnv(): Record<string, string> {
+  return {
+    browser: navigator.userAgent,
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || '',
+    language: navigator.language,
+    viewport: `${window.innerWidth}x${window.innerHeight}`,
   }
 }
 
