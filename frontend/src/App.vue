@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { bootstrap, getCloudflareTrace, getEntrypoints, getReport, iframeContext, submitReport } from './api/client'
-import { asnLabel, traceEndpointFromBrowser, uniqueASNLabels } from './diagnose/client-trace'
+import { asnLabel, traceEndpointFromBrowser } from './diagnose/client-trace'
 import { buildReport, diagnoseEndpoint, type DiagnoseProgressEvent } from './diagnose/runner'
 import type { BootstrapResponse, ClientTraceInfo, EndpointResult, EntryPoint } from './types'
 
@@ -441,21 +441,6 @@ function traceValue(key: string): string {
   return cfTrace.value?.[key] || '-'
 }
 
-function traceIPs(trace: ClientTraceInfo | null | undefined): string {
-  if (!trace?.ips?.length) return '-'
-  return trace.ips.map((item) => item.ip).join(' / ')
-}
-
-function traceASNs(trace: ClientTraceInfo | null | undefined): string {
-  return uniqueASNLabels(trace?.ips)
-}
-
-function traceNetworks(trace: ClientTraceInfo | null | undefined): string {
-  if (!trace?.ips?.length) return '-'
-  const names = trace.ips.map((item) => item.asn?.name).filter(Boolean) as string[]
-  return Array.from(new Set(names)).join(' / ') || '-'
-}
-
 function buildManualEndpoint(rawURL: string, rawName: string): EntryPoint {
   const raw = rawURL.trim()
   if (!raw) throw new Error('请输入 endpoint URL')
@@ -685,18 +670,6 @@ function manualEndpointID(value: string): string {
               <div>
                 <span class="label">端点连接耗时</span>
                 <strong>{{ formatMs(row.state.metrics.avgEndpointPing) }}</strong>
-              </div>
-              <div>
-                <span class="label">端点解析 IP</span>
-                <strong>{{ traceIPs(row.state.clientTrace) }}</strong>
-              </div>
-              <div>
-                <span class="label">端点 ASN</span>
-                <strong>{{ traceASNs(row.state.clientTrace) }}</strong>
-              </div>
-              <div>
-                <span class="label">网络归属</span>
-                <strong>{{ traceNetworks(row.state.clientTrace) }}</strong>
               </div>
             </div>
             <div v-if="row.state.clientTrace?.ips?.length" class="trace-table">
