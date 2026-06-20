@@ -444,6 +444,7 @@ function traceNetworks(trace: ClientTraceInfo | null | undefined): string {
 }
 
 function traceNote(trace: ClientTraceInfo | null | undefined): string {
+  if (!trace) return '等待测试'
   if (trace?.error) return trace.error
   if (trace?.note === 'browser_hop_trace_unavailable') return '浏览器不可获取逐跳 hop'
   return '-'
@@ -691,7 +692,11 @@ function manualEndpointID(value: string): string {
               <strong>{{ formatMbps(metricBySize(row.state.metrics.uploadBySize, size)) }}</strong>
             </div>
           </div>
-          <div v-if="row.state.clientTrace" class="client-trace">
+          <div class="client-trace">
+            <div class="client-trace-head">
+              <strong>客户端 Trace</strong>
+              <span>{{ row.state.clientTrace ? '已获取' : '等待测试' }}</span>
+            </div>
             <div class="route-summary">
               <div>
                 <span class="label">端点解析 IP</span>
@@ -707,29 +712,29 @@ function manualEndpointID(value: string): string {
               </div>
               <div>
                 <span class="label">Ping 平均</span>
-                <strong>{{ formatMs(row.state.clientTrace.avg_ping_ms) }}</strong>
+                <strong>{{ formatMs(row.state.clientTrace?.avg_ping_ms) }}</strong>
               </div>
               <div>
                 <span class="label">TTFB 平均</span>
-                <strong>{{ formatMs(row.state.clientTrace.avg_ttfb_ms) }}</strong>
+                <strong>{{ formatMs(row.state.clientTrace?.avg_ttfb_ms) }}</strong>
               </div>
               <div>
                 <span class="label">TTFT 平均</span>
-                <strong>{{ formatMs(row.state.clientTrace.avg_ttft_ms) }}</strong>
+                <strong>{{ formatMs(row.state.clientTrace?.avg_ttft_ms) }}</strong>
               </div>
               <div>
                 <span class="label">Trace 状态</span>
                 <strong>{{ traceNote(row.state.clientTrace) }}</strong>
               </div>
             </div>
-            <div v-if="row.state.clientTrace.ips?.length" class="trace-table">
+            <div v-if="row.state.clientTrace?.ips?.length" class="trace-table">
               <div class="trace-row trace-head">
                 <span>IP</span>
                 <span>ASN</span>
                 <span>网络</span>
                 <span>Prefix</span>
               </div>
-              <div v-for="ip in row.state.clientTrace.ips" :key="`${row.endpoint.id}-${ip.ip}`" class="trace-row">
+              <div v-for="ip in row.state.clientTrace?.ips" :key="`${row.endpoint.id}-${ip.ip}`" class="trace-row">
                 <span>{{ ip.ip }}</span>
                 <span>{{ asnLabel(ip.asn) }}</span>
                 <span>{{ ip.asn?.name || '-' }}</span>

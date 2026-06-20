@@ -291,6 +291,21 @@ h2 {
   padding: 10px;
 }
 
+.client-trace-head {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+}
+
+.client-trace-head strong {
+  font-size: 14px;
+}
+
+.client-trace-head span {
+  color: #5f6c7b;
+  font-size: 12px;
+}
+
 .route-summary {
   display: grid;
   gap: 10px;
@@ -517,6 +532,7 @@ th {
   .endpoint-main span,
   .card-head p,
   .current-line,
+  .client-trace-head span,
   .panel-head span,
   .label {
     color: #aeb9c7;
