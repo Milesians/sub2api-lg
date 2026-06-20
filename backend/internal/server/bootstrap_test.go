@@ -30,6 +30,9 @@ func TestSrcURLMatchesHost(t *testing.T) {
 	if !srcURLMatchesHost("https://sub2api.example.com/custom/network-diagnose", "sub2api.example.com") {
 		t.Fatal("matching src_url and src_host should pass")
 	}
+	if !srcURLMatchesHost("https://sub2api.example.com/custom/network-diagnose", "https://sub2api.example.com") {
+		t.Fatal("origin src_host should pass")
+	}
 	if srcURLMatchesHost("https://evil.example.com/custom/network-diagnose", "sub2api.example.com") {
 		t.Fatal("mismatched src_url and src_host should fail")
 	}
@@ -79,7 +82,7 @@ func TestBootstrapVerifiesSub2APITokenAndUserID(t *testing.T) {
 	defer upstream.Close()
 
 	handler := testServer(t, upstream.URL)
-	okBody := []byte(`{"user_id":"123","token":"valid-token","src_host":"sub2api.example.com","src_url":"https://sub2api.example.com/custom/network-diagnose"}`)
+	okBody := []byte(`{"user_id":"123","token":"valid-token","src_host":"https://sub2api.example.com","src_url":"https://sub2api.example.com/custom/network-diagnose"}`)
 	res := postBootstrap(handler, okBody)
 	if res.Code != http.StatusOK {
 		t.Fatalf("valid bootstrap status = %d, body = %s", res.Code, res.Body.String())

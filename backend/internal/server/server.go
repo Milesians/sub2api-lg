@@ -166,7 +166,7 @@ func (s *Server) bootstrap(w http.ResponseWriter, r *http.Request) {
 	}
 	req.UserID = strings.TrimSpace(req.UserID)
 	req.Token = strings.TrimSpace(req.Token)
-	req.SrcHost = strings.TrimSpace(req.SrcHost)
+	req.SrcHost = normalizeSrcHost(req.SrcHost)
 	req.SrcURL = strings.TrimSpace(req.SrcURL)
 	if req.UserID == "" {
 		http.Error(w, "user_id is required", http.StatusBadRequest)
@@ -382,9 +382,9 @@ func (s *Server) srcHostAllowed(host string) bool {
 	if len(s.cfg.Security.AllowedSrcHosts) == 0 {
 		return true
 	}
-	host = strings.ToLower(strings.TrimSpace(host))
+	host = normalizeSrcHost(host)
 	for _, allowed := range s.cfg.Security.AllowedSrcHosts {
-		if strings.EqualFold(host, strings.ToLower(strings.TrimSpace(allowed))) {
+		if strings.EqualFold(host, normalizeSrcHost(allowed)) {
 			return true
 		}
 	}
@@ -399,7 +399,28 @@ func srcURLMatchesHost(srcURL, srcHost string) bool {
 	if err != nil {
 		return false
 	}
-	return strings.EqualFold(parsed.Host, srcHost)
+	return strings.EqualFold(parsed.Hostname(), normalizeSrcHost(srcHost))
+}
+
+func normalizeSrcHost(value string) string {
+	value = strings.TrimSpace(strings.ToLower(value))
+	if value == "" {
+		return ""
+	}
+	if strings.HasPrefix(value, "//") {
+		value = "https:" + value
+	}
+	if strings.Contains(value, "://") {
+		parsed, err := url.Parse(value)
+		if err == nil && parsed.Hostname() != "" {
+			return parsed.Hostname()
+		}
+	}
+	parsed, err := url.Parse("https://" + value)
+	if err == nil && parsed.Hostname() != "" {
+		return parsed.Hostname()
+	}
+	return value
 }
 
 func validateVerifiedUser(expectedUserID string, user *adminclient.User) error {
