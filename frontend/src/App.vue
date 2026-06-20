@@ -514,17 +514,31 @@ function formatIPInfo(value: IPInfo | null | undefined) {
   return `${value.ip}${asn ? ` (${asn}${name})` : ''}`
 }
 
-function formatIPList(values: IPInfo[] | null | undefined) {
-  if (!values?.length) return '-'
-  return values.slice(0, 4).map((item) => formatIPInfo(item)).join(' / ')
-}
-
 function endpointDNS(endpoint: EntryPoint, result?: EndpointResult) {
   return result?.netinfo?.dns_records || endpoint.dns_records || []
 }
 
 function endpointOriginPeer(result?: EndpointResult) {
   return result?.netinfo?.origin_peer
+}
+
+function progressPercent(row: { state: EndpointRunState }) {
+  const first = row.state.samples[0]
+  if (!first?.sample_total) return 0
+  return Math.min(100, Math.round((row.state.samples.length / first.sample_total) * 100))
+}
+
+function visibleIPs(values: IPInfo[] | null | undefined, limit = 4) {
+  return (values || []).slice(0, limit)
+}
+
+function hiddenIPCount(values: IPInfo[] | null | undefined, limit = 4) {
+  return Math.max(0, (values?.length || 0) - limit)
+}
+
+function asnText(value: IPInfo | null | undefined) {
+  if (!value?.asn) return '-'
+  return `AS${value.asn}${value.as_name ? ` · ${value.as_name}` : ''}`
 }
 
 function pct(value: number | null | undefined) {
@@ -621,10 +635,47 @@ function applyTheme(theme: string) {
             <div><span class="label">下载 / 上传</span><strong>{{ formatMbps(ep.download_mbps) }} / {{ formatMbps(ep.upload_mbps) }}</strong></div>
             <div><span class="label">流式首事件</span><strong>{{ formatMs(ep.stream_first_event_ms) }}</strong></div>
             <div><span class="label">CORS / Timing</span><strong>{{ ep.cors_ok ? '正常' : '异常' }} / {{ ep.timing_detail_available ? '可用' : '不可用' }}</strong></div>
-            <div><span class="label">端点 DNS</span><strong>{{ formatIPList(ep.endpoint_dns) }}</strong></div>
-            <div><span class="label">源站回源 IP</span><strong>{{ formatIPInfo(ep.origin_peer) }}</strong></div>
           </div>
         </article>
+      </section>
+
+      <section class="panel network-panel">
+        <div class="panel-head">
+          <h2>网络路径详情</h2>
+          <span>{{ reportEntrypoints.length }} 个入口</span>
+        </div>
+        <div class="network-grid">
+          <article v-for="ep in reportEntrypoints" :key="`report-network-${ep.endpoint_public_id}`" class="network-card">
+            <header>
+              <div>
+                <h2>{{ ep.display_name }}</h2>
+                <p>{{ ep.endpoint_public_id }}</p>
+              </div>
+              <span :class="['badge', ep.level]">{{ levelText(ep.level) }}</span>
+            </header>
+            <div class="path-section">
+              <span class="label">端点 DNS</span>
+              <div v-if="ep.endpoint_dns?.length" class="ip-list">
+                <span v-for="ip in visibleIPs(ep.endpoint_dns)" :key="`${ep.endpoint_public_id}-dns-${ip.ip}`" class="ip-chip">
+                  <strong>{{ ip.ip }}</strong>
+                  <small>{{ asnText(ip) }}</small>
+                </span>
+                <span v-if="hiddenIPCount(ep.endpoint_dns)" class="ip-chip muted">+{{ hiddenIPCount(ep.endpoint_dns) }}</span>
+              </div>
+              <strong v-else>-</strong>
+            </div>
+            <div class="path-section">
+              <span class="label">源站回源 IP</span>
+              <div v-if="ep.origin_peer?.ip" class="ip-list">
+                <span class="ip-chip accent">
+                  <strong>{{ ep.origin_peer.ip }}</strong>
+                  <small>{{ asnText(ep.origin_peer) }}</small>
+                </span>
+              </div>
+              <strong v-else>-</strong>
+            </div>
+          </article>
+        </div>
       </section>
       <p v-if="error" class="error">{{ error }}</p>
     </section>
@@ -773,8 +824,8 @@ function applyTheme(theme: string) {
       </section>
     </section>
 
-    <section v-else class="stack">
-      <header class="hero">
+    <section v-else class="stack customer-stack">
+      <header class="hero customer-hero">
         <div>
           <span class="eyebrow">Looking glass</span>
           <h1>入口访问诊断</h1>
@@ -787,44 +838,23 @@ function applyTheme(theme: string) {
         </div>
       </header>
 
-      <section class="panel custom-panel">
-        <div class="panel-head">
-          <h2>自定义端点</h2>
-          <span>仅本次浏览器测试，不进入客户报告 URL</span>
+      <section class="panel control-panel">
+        <div class="control-row">
+          <form class="custom-form compact" @submit.prevent="addCustomEndpoint">
+            <input v-model="customName" :disabled="running" placeholder="自定义名称">
+            <input v-model="customURL" :disabled="running" placeholder="https://example.com/lg">
+            <button :disabled="running" type="submit">添加</button>
+          </form>
+          <div v-if="running" class="progress compact-progress">正在测试：{{ progress }}</div>
+          <div v-else class="state compact-state">{{ results.length ? '诊断完成' : '待开始' }}</div>
         </div>
-        <form class="custom-form" @submit.prevent="addCustomEndpoint">
-          <input v-model="customName" :disabled="running" placeholder="显示名称，可选">
-          <input v-model="customURL" :disabled="running" placeholder="https://example.com 或 https://example.com/lg">
-          <button :disabled="running" type="submit">添加</button>
-        </form>
-      </section>
 
-      <div v-if="running" class="progress">正在测试：{{ progress }}</div>
-      <div v-else-if="results.length === 0" class="state">待开始</div>
-      <p v-if="error" class="error">{{ error }}</p>
-
-      <section class="summary">
-        <div><span class="label">完整测试成功率</span><strong>{{ pct(aggregate.successRate) }}</strong></div>
-        <div><span class="label">诊断接口成功率</span><strong>{{ pct(aggregate.pingSuccessRate) }}</strong></div>
-        <div><span class="label">诊断接口延迟</span><strong>{{ formatMs(aggregate.avgPing) }}</strong></div>
-        <div><span class="label">平均 TTFB</span><strong>{{ formatMs(aggregate.avgTTFB) }}</strong></div>
-        <div><span class="label">平均 TTFT</span><strong>{{ formatMs(aggregate.avgTTFT) }}</strong></div>
-        <div><span class="label">最大包下载 {{ largestSize }}</span><strong>{{ formatMbps(aggregate.download) }}</strong></div>
-        <div><span class="label">最大包上传 {{ largestSize }}</span><strong>{{ formatMbps(aggregate.upload) }}</strong></div>
-      </section>
-
-      <section class="panel">
-        <div class="panel-head">
-          <h2>选择端点</h2>
-          <span>{{ selectedEndpoints.length }}/{{ entrypoints.length }}</span>
-        </div>
-        <div class="endpoint-grid">
-          <label v-for="row in rows" :key="row.endpoint.id" :class="['endpoint-option', { selected: row.selected }]">
+        <div class="endpoint-picker">
+          <label v-for="row in rows" :key="row.endpoint.id" :class="['endpoint-choice', { selected: row.selected }]">
             <input type="checkbox" :checked="row.selected" :disabled="running" @change="toggleEndpoint(row.endpoint.id, $event)">
-            <span class="endpoint-main">
+            <span>
               <strong>{{ displayName(row.endpoint) }}</strong>
-              <span>{{ row.endpoint.description || '浏览器诊断入口' }}</span>
-              <span>DNS {{ formatIPList(row.endpoint.dns_records) }}</span>
+              <small>{{ row.endpoint.description || '浏览器诊断入口' }}</small>
             </span>
             <span :class="['run-status', row.state.status]">{{ statusText(row.state.status) }}</span>
             <button v-if="row.endpoint.source === 'custom'" class="ghost small" :disabled="running" type="button" @click.prevent.stop="removeCustomEndpoint(row.endpoint.id)">移除</button>
@@ -832,40 +862,111 @@ function applyTheme(theme: string) {
         </div>
       </section>
 
-      <section v-if="best" class="summary">
-        <div><span class="label">推荐入口</span><strong>{{ best.name }}</strong></div>
-        <div><span class="label">成功率</span><strong>{{ pct(best.browser.success_rate) }}</strong></div>
-        <div><span class="label">p95 总耗时</span><strong>{{ formatMs(best.browser.p95_duration_ms) }}</strong></div>
-        <div><span class="label">p95 首包</span><strong>{{ formatMs(best.browser.p95_ttfb_ms) }}</strong></div>
+      <p v-if="error" class="error">{{ error }}</p>
+
+      <section class="summary insight-strip">
+        <div><span class="label">推荐入口</span><strong>{{ best?.name || '-' }}</strong></div>
+        <div><span class="label">完整成功率</span><strong>{{ pct(aggregate.successRate) }}</strong></div>
+        <div><span class="label">p95 总耗时</span><strong>{{ formatMs(best?.browser.p95_duration_ms) }}</strong></div>
+        <div><span class="label">p95 首包</span><strong>{{ formatMs(best?.browser.p95_ttfb_ms) }}</strong></div>
+        <div><span class="label">{{ largestSize }} 下载</span><strong>{{ formatMbps(aggregate.download) }}</strong></div>
+        <div><span class="label">{{ largestSize }} 上传</span><strong>{{ formatMbps(aggregate.upload) }}</strong></div>
       </section>
 
-      <section class="live-grid">
-        <article v-for="row in selectedRows" :key="row.endpoint.id" class="live-card">
-          <header class="card-head">
+      <section class="panel performance-panel">
+        <div class="panel-head">
+          <h2>端点性能对比</h2>
+          <span>{{ selectedRows.length }} 个入口</span>
+        </div>
+        <div class="table-wrap compact-table">
+          <table class="performance-table">
+            <thead>
+              <tr>
+                <th>入口</th>
+                <th>状态</th>
+                <th>成功率</th>
+                <th>Ping</th>
+                <th>TTFB</th>
+                <th>TTFT</th>
+                <th v-for="size in sizeLabels" :key="`download-head-${size}`">下载 {{ size }}</th>
+                <th>{{ largestSize }} 上传</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="row in selectedRows" :key="`perf-${row.endpoint.id}`">
+                <td>
+                  <strong>{{ displayName(row.endpoint) }}</strong>
+                  <span>{{ row.endpoint.description || '浏览器诊断入口' }}</span>
+                </td>
+                <td><span :class="['run-status', row.state.status]">{{ statusText(row.state.status) }}</span></td>
+                <td>{{ pct(row.state.metrics.successRate) }}</td>
+                <td>{{ formatMs(row.state.metrics.avgPing) }}</td>
+                <td>{{ formatMs(row.state.metrics.avgTTFB) }}</td>
+                <td>{{ formatMs(row.state.metrics.avgTTFT) }}</td>
+                <td v-for="size in sizeLabels" :key="`${row.endpoint.id}-perf-download-${size}`">{{ formatMbps(metricBySize(row.state.metrics.downloadBySize, size)) }}</td>
+                <td>{{ formatMbps(metricBySize(row.state.metrics.uploadBySize, largestSize)) }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel progress-panel">
+        <div class="panel-head">
+          <h2>测试进度</h2>
+          <span>{{ progress || statusText(running ? 'running' : 'idle') }}</span>
+        </div>
+        <div class="progress-list">
+          <article v-for="row in selectedRows" :key="`progress-${row.endpoint.id}`" class="progress-item">
             <div>
-              <h2>{{ displayName(row.endpoint) }}</h2>
-              <p>{{ row.endpoint.description || '浏览器诊断入口' }}</p>
+              <strong>{{ displayName(row.endpoint) }}</strong>
+              <span>{{ row.state.current }}</span>
             </div>
+            <div class="progress-track"><span :style="{ width: `${progressPercent(row)}%` }"></span></div>
             <span :class="['run-status', row.state.status]">{{ statusText(row.state.status) }}</span>
-          </header>
-          <div class="current-line">{{ row.state.current }}</div>
-          <div class="meter"><span :style="{ width: `${row.state.samples.length ? Math.round(row.state.samples.length / (row.state.samples[0]?.sample_total || 1) * 100) : 0}%` }"></span></div>
-          <div class="metric-grid">
-            <div><span class="label">完整成功率</span><strong>{{ pct(row.state.metrics.successRate) }}</strong></div>
-            <div><span class="label">Ping 成功率</span><strong>{{ pct(row.state.metrics.pingSuccessRate) }}</strong></div>
-            <div><span class="label">Ping 延迟</span><strong>{{ formatMs(row.state.metrics.avgPing) }}</strong></div>
-            <div><span class="label">TTFB</span><strong>{{ formatMs(row.state.metrics.avgTTFB) }}</strong></div>
-            <div><span class="label">TTFT</span><strong>{{ formatMs(row.state.metrics.avgTTFT) }}</strong></div>
-            <div><span class="label">端点 DNS</span><strong>{{ formatIPList(endpointDNS(row.endpoint, row.result)) }}</strong></div>
-            <div><span class="label">源站回源 IP</span><strong>{{ formatIPInfo(endpointOriginPeer(row.result)) }}</strong></div>
-            <div v-for="size in sizeLabels" :key="`${row.endpoint.id}-download-${size}`"><span class="label">下载 {{ size }}</span><strong>{{ formatMbps(metricBySize(row.state.metrics.downloadBySize, size)) }}</strong></div>
-            <div v-for="size in sizeLabels" :key="`${row.endpoint.id}-upload-${size}`"><span class="label">上传 {{ size }}</span><strong>{{ formatMbps(metricBySize(row.state.metrics.uploadBySize, size)) }}</strong></div>
-          </div>
-          <ol class="log-list">
-            <li v-for="item in row.state.logs" :key="item">{{ item }}</li>
-            <li v-if="row.state.logs.length === 0">待测试</li>
-          </ol>
-        </article>
+          </article>
+        </div>
+      </section>
+
+      <section class="panel network-panel">
+        <div class="panel-head">
+          <h2>网络路径详情</h2>
+          <span>DNS / ASN / 回源</span>
+        </div>
+        <div class="network-grid">
+          <article v-for="row in selectedRows" :key="`network-${row.endpoint.id}`" class="network-card">
+            <header>
+              <div>
+                <h2>{{ displayName(row.endpoint) }}</h2>
+                <p>{{ row.endpoint.description || '浏览器诊断入口' }}</p>
+              </div>
+              <span :class="['badge', row.result?.level]">{{ levelText(row.result?.level) }}</span>
+            </header>
+
+            <div class="path-section">
+              <span class="label">端点 DNS</span>
+              <div v-if="endpointDNS(row.endpoint, row.result).length" class="ip-list">
+                <span v-for="ip in visibleIPs(endpointDNS(row.endpoint, row.result))" :key="`${row.endpoint.id}-dns-${ip.ip}`" class="ip-chip">
+                  <strong>{{ ip.ip }}</strong>
+                  <small>{{ asnText(ip) }}</small>
+                </span>
+                <span v-if="hiddenIPCount(endpointDNS(row.endpoint, row.result))" class="ip-chip muted">+{{ hiddenIPCount(endpointDNS(row.endpoint, row.result)) }}</span>
+              </div>
+              <strong v-else>-</strong>
+            </div>
+
+            <div class="path-section">
+              <span class="label">源站回源 IP</span>
+              <div v-if="endpointOriginPeer(row.result)?.ip" class="ip-list">
+                <span class="ip-chip accent">
+                  <strong>{{ endpointOriginPeer(row.result)?.ip }}</strong>
+                  <small>{{ asnText(endpointOriginPeer(row.result)) }}</small>
+                </span>
+              </div>
+              <strong v-else>-</strong>
+            </div>
+          </article>
+        </div>
       </section>
 
       <section v-if="shareURL" class="report-line">

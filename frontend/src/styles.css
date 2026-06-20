@@ -132,7 +132,6 @@ a {
 .progress,
 .error,
 .report-line,
-.live-card,
 .result-card,
 .table-wrap {
   border: 1px solid var(--border);
@@ -205,6 +204,39 @@ p {
   flex: 1;
 }
 
+.customer-stack {
+  gap: 12px;
+}
+
+.customer-hero {
+  padding: 16px 18px;
+}
+
+.control-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.control-row {
+  align-items: center;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(0, 1fr) minmax(180px, auto);
+}
+
+.custom-form.compact {
+  border: 0;
+  background: transparent;
+  padding: 0;
+}
+
+.compact-progress,
+.compact-state {
+  box-shadow: none;
+  min-height: 36px;
+  padding: 8px 12px;
+}
+
 .state,
 .progress,
 .error,
@@ -233,6 +265,10 @@ p {
   padding: 12px;
 }
 
+.insight-strip {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
 .label,
 .kv-grid span {
   color: var(--muted);
@@ -247,7 +283,6 @@ strong {
 }
 
 .panel-head,
-.card-head,
 .result-card header {
   align-items: center;
   display: flex;
@@ -261,23 +296,18 @@ strong {
   font-size: 12px;
 }
 
-.endpoint-grid,
-.endpoint-results,
-.live-grid {
+.endpoint-results {
   display: grid;
   gap: 10px;
 }
 
-.endpoint-grid {
-  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+.endpoint-picker {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
 }
 
-.endpoint-results,
-.live-grid {
-  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
-}
-
-.endpoint-option {
+.endpoint-choice {
   align-items: center;
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -285,35 +315,38 @@ strong {
   display: grid;
   gap: 10px;
   grid-template-columns: auto minmax(0, 1fr) auto auto;
+  min-height: 58px;
   min-width: 0;
-  padding: 10px 12px;
+  padding: 9px 10px;
 }
 
-.endpoint-option.selected {
+.endpoint-choice.selected {
   border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 9%, var(--panel));
+  background: color-mix(in srgb, var(--accent) 8%, var(--panel));
 }
 
-.endpoint-main {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
+.endpoint-choice > span {
+  display: grid;
+  gap: 3px;
   min-width: 0;
 }
 
-.endpoint-main strong,
-.card-head h2 {
+.endpoint-choice strong {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.endpoint-main span,
-.card-head p,
-.current-line {
+.endpoint-choice small {
   color: var(--muted);
   font-size: 12px;
-  overflow-wrap: anywhere;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.endpoint-results {
+  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
 }
 
 .run-status,
@@ -359,7 +392,6 @@ strong {
   color: var(--muted);
 }
 
-.live-card,
 .result-card {
   display: flex;
   flex-direction: column;
@@ -379,33 +411,6 @@ strong {
   border-left: 3px solid var(--border);
   min-width: 0;
   padding-left: 9px;
-}
-
-.meter {
-  background: color-mix(in srgb, var(--muted) 18%, transparent);
-  border-radius: 999px;
-  height: 8px;
-  overflow: hidden;
-}
-
-.meter span {
-  background: var(--accent-2);
-  display: block;
-  height: 100%;
-  transition: width 160ms ease;
-}
-
-.log-list {
-  background: var(--panel-2);
-  border-radius: 8px;
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1.5;
-  list-style: none;
-  margin: 0;
-  max-height: 126px;
-  overflow: auto;
-  padding: 10px 12px;
 }
 
 .admin-layout {
@@ -433,6 +438,21 @@ table {
   border-collapse: collapse;
   min-width: 1120px;
   width: 100%;
+}
+
+.compact-table table {
+  min-width: 1040px;
+}
+
+.performance-table td:first-child {
+  min-width: 190px;
+}
+
+.performance-table td:first-child span {
+  color: var(--muted);
+  display: block;
+  font-size: 12px;
+  margin-top: 3px;
 }
 
 th,
@@ -469,6 +489,119 @@ th {
 .diagnosis-list span {
   color: var(--muted);
   font-size: 12px;
+}
+
+.progress-list {
+  display: grid;
+  gap: 8px;
+}
+
+.progress-item {
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(160px, 240px) minmax(0, 1fr) auto;
+  min-width: 0;
+  padding: 10px 12px;
+}
+
+.progress-item > div:first-child {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.progress-item > div:first-child strong,
+.progress-item > div:first-child span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.progress-item > div:first-child span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.progress-track {
+  background: color-mix(in srgb, var(--muted) 18%, transparent);
+  border-radius: 999px;
+  height: 8px;
+  overflow: hidden;
+}
+
+.progress-track span {
+  background: var(--accent-2);
+  display: block;
+  height: 100%;
+  transition: width 160ms ease;
+}
+
+.network-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+}
+
+.network-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  padding: 12px;
+}
+
+.network-card header {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.path-section {
+  border-top: 1px solid var(--border);
+  min-width: 0;
+  padding-top: 10px;
+}
+
+.ip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.ip-chip {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-2);
+  display: inline-grid;
+  gap: 2px;
+  max-width: 100%;
+  min-width: 0;
+  padding: 7px 9px;
+}
+
+.ip-chip strong,
+.ip-chip small {
+  overflow-wrap: anywhere;
+}
+
+.ip-chip small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.ip-chip.accent {
+  border-color: color-mix(in srgb, var(--accent-2) 42%, var(--border));
+  background: color-mix(in srgb, var(--accent-2) 9%, var(--panel));
+}
+
+.ip-chip.muted {
+  color: var(--muted);
+  align-items: center;
 }
 
 .recommendations {
@@ -549,6 +682,11 @@ th {
     flex-direction: column;
   }
 
+  .control-row,
+  .progress-item {
+    grid-template-columns: 1fr;
+  }
+
   .actions {
     width: 100%;
   }
@@ -558,8 +696,7 @@ th {
   }
 
   .admin-layout,
-  .endpoint-results,
-  .live-grid {
+  .endpoint-results {
     grid-template-columns: 1fr;
   }
 
@@ -571,17 +708,26 @@ th {
   .kv-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  .insight-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 560px) {
   .summary,
   .metric-grid,
-  .kv-grid,
-  .endpoint-grid {
+  .kv-grid {
     grid-template-columns: 1fr;
   }
 
-  .endpoint-option {
+  .endpoint-choice {
     grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .endpoint-choice .run-status,
+  .endpoint-choice button {
+    grid-column: 2;
+    justify-self: start;
   }
 }
