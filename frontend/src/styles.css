@@ -350,8 +350,7 @@ strong {
 }
 
 .run-status,
-.badge,
-.recommendations span {
+.badge {
   border-radius: 999px;
   display: inline-flex;
   font-size: 12px;
@@ -602,17 +601,6 @@ th {
 .ip-chip.muted {
   color: var(--muted);
   align-items: center;
-}
-
-.recommendations {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.recommendations span {
-  background: color-mix(in srgb, var(--accent-2) 16%, transparent);
-  color: var(--accent-2);
 }
 
 .score-ring {

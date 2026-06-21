@@ -236,7 +236,6 @@ export async function diagnoseEndpoint(
       dns_records: endpoint.dns_records || [],
     },
     level,
-    recommendation: recommendation(level, summary),
   }
 }
 
@@ -366,38 +365,4 @@ function scoreLevel(summary: BrowserSummary): 'good' | 'warning' | 'bad' {
   if (summary.success_rate >= 0.98 && (summary.p95_duration_ms ?? Infinity) < 800) return 'good'
   if (summary.success_rate >= 0.95 && (summary.p95_duration_ms ?? Infinity) < 1500) return 'warning'
   return 'bad'
-}
-
-function scoreNumber(summary: BrowserSummary): number {
-  let score = Math.round(summary.success_rate * 100)
-  if ((summary.p95_duration_ms ?? 0) > 800) score -= 10
-  if ((summary.p95_duration_ms ?? 0) > 1500) score -= 20
-  if (summary.stream_buffered) score -= 10
-  if (summary.cors_blocked) score -= 30
-  return Math.max(0, Math.min(100, score))
-}
-
-function recommendation(level: 'good' | 'warning' | 'bad', summary: BrowserSummary): string {
-  if (summary.cors_blocked) return '浏览器无法跨入口读取诊断接口，请检查 /diag/* 的 CORS 和 Timing-Allow-Origin。'
-  if (summary.stream_buffered) return '诊断流事件疑似被缓冲，请检查反向代理或 CDN 的流式响应配置。'
-  if (level === 'good') return '当前入口表现稳定，可以继续使用。'
-  if (level === 'warning') return '当前入口可用但存在波动，建议和其他入口对比后选择。'
-  return '该入口 HTTP 失败率或 p95 耗时偏高，建议检查 CDN、WAF、反向代理或源站链路。'
-}
-
-function mainProblem(summary: BrowserSummary): string | null {
-  if (summary.cors_blocked) return 'CORS 配置异常'
-  if (summary.stream_buffered) return '流式响应疑似缓冲'
-  if (summary.http_loss_rate > 0.05) return 'HTTP 失败率偏高'
-  if ((summary.p95_duration_ms ?? 0) >= 1500) return '入口整体偏慢'
-  return null
-}
-
-function compareResults(a: EndpointResult, b: EndpointResult): number {
-  return b.browser.success_rate - a.browser.success_rate ||
-    a.browser.http_loss_rate - b.browser.http_loss_rate ||
-    (a.browser.p95_ttfb_ms ?? Infinity) - (b.browser.p95_ttfb_ms ?? Infinity) ||
-    (a.browser.p95_duration_ms ?? Infinity) - (b.browser.p95_duration_ms ?? Infinity) ||
-    Number(a.browser.stream_buffered) - Number(b.browser.stream_buffered) ||
-    (a.browser.max_chunk_gap_ms ?? Infinity) - (b.browser.max_chunk_gap_ms ?? Infinity)
 }

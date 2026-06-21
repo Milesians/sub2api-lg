@@ -68,7 +68,6 @@ const selectedEndpoints = computed(() => entrypoints.value.filter((endpoint) => 
 const selectedRows = computed(() => rows.value.filter((row) => row.selected))
 const sizeLabels = computed(() => normalizeSizes(boot.value?.probe.blob_sizes || ['64k', '1m', '5m', '20m']))
 const largestSize = computed(() => sizeLabels.value[sizeLabels.value.length - 1] || '20m')
-const best = computed(() => [...results.value].sort(compareResults)[0])
 const aggregate = computed(() => {
   const states = selectedIds.value.map((id) => endpointState(id)).filter((state) => state.samples.length > 0 || state.result)
   return {
@@ -467,13 +466,6 @@ function averageMetric(values: Array<number | null | undefined>): number | null 
   return Number((ok.reduce((sum, item) => sum + item, 0) / ok.length).toFixed(2))
 }
 
-function compareResults(a: EndpointResult, b: EndpointResult): number {
-  return b.browser.success_rate - a.browser.success_rate ||
-    a.browser.http_loss_rate - b.browser.http_loss_rate ||
-    (a.browser.p95_ttfb_ms ?? Infinity) - (b.browser.p95_ttfb_ms ?? Infinity) ||
-    (a.browser.p95_duration_ms ?? Infinity) - (b.browser.p95_duration_ms ?? Infinity)
-}
-
 function displayName(endpoint: EntryPoint): string {
   return endpoint.display_name || endpoint.name || endpoint.id
 }
@@ -579,7 +571,7 @@ function applyTheme(theme: string) {
         <div>
           <span class="eyebrow">Customer report</span>
           <h1>诊断报告 {{ reportSupportRef.short_code || report.report_id || '' }}</h1>
-          <p>{{ reportSummary.main_message || '客户可见的脱敏诊断结果' }}</p>
+          <p>客户可见的脱敏诊断数据</p>
         </div>
         <div :class="['score-ring', reportSummary.level]">
           <strong>{{ reportSummary.score ?? '-' }}</strong>
@@ -588,10 +580,6 @@ function applyTheme(theme: string) {
       </header>
 
       <section class="summary">
-        <div>
-          <span class="label">推荐入口</span>
-          <strong>{{ reportSummary.best_endpoint_name || '-' }}</strong>
-        </div>
         <div>
           <span class="label">报告编号</span>
           <strong>{{ report.report_id || reportSupportRef.report_id || '-' }}</strong>
@@ -603,17 +591,6 @@ function applyTheme(theme: string) {
         <div>
           <span class="label">语言/时区</span>
           <strong>{{ reportClientEnv.language || '-' }} / {{ reportClientEnv.timezone || '-' }}</strong>
-        </div>
-      </section>
-
-      <section class="panel">
-        <div class="panel-head">
-          <h2>建议动作</h2>
-          <span>{{ reportSummary.recommendations?.length || 0 }} 条</span>
-        </div>
-        <div class="recommendations">
-          <span v-for="item in reportSummary.recommendations || []" :key="item">{{ item }}</span>
-          <span v-if="!reportSummary.recommendations?.length">暂无额外建议</span>
         </div>
       </section>
 
@@ -714,7 +691,6 @@ function applyTheme(theme: string) {
                 <th>用户</th>
                 <th>等级</th>
                 <th>分数</th>
-                <th>推荐入口</th>
                 <th>问题代码</th>
                 <th>操作</th>
               </tr>
@@ -726,7 +702,6 @@ function applyTheme(theme: string) {
                 <td class="mono">{{ item.user_id || '-' }}</td>
                 <td><span :class="['badge', item.level]">{{ levelText(item.level) }}</span></td>
                 <td>{{ item.score }}</td>
-                <td>{{ item.best_endpoint_name || '-' }}</td>
                 <td>{{ (item.problem_codes || []).join(', ') || '-' }}</td>
                 <td><button @click="openAdminReport(item.report_id)">查看</button></td>
               </tr>
@@ -755,7 +730,6 @@ function applyTheme(theme: string) {
           </div>
           <div class="summary">
             <div><span class="label">等级/分数</span><strong>{{ levelText(adminCustomerReport.summary?.level) }} / {{ adminCustomerReport.summary?.score ?? '-' }}</strong></div>
-            <div><span class="label">推荐入口</span><strong>{{ adminCustomerReport.summary?.best_endpoint_name || '-' }}</strong></div>
             <div><span class="label">报告时间</span><strong>{{ formatDate(adminCustomerReport.created_at) }}</strong></div>
             <div><span class="label">分享状态</span><strong>{{ adminReportDetail.customer_share_enabled ? '开启' : '关闭' }}</strong></div>
           </div>
@@ -865,10 +839,11 @@ function applyTheme(theme: string) {
       <p v-if="error" class="error">{{ error }}</p>
 
       <section class="summary insight-strip">
-        <div><span class="label">推荐入口</span><strong>{{ best?.name || '-' }}</strong></div>
         <div><span class="label">完整成功率</span><strong>{{ pct(aggregate.successRate) }}</strong></div>
-        <div><span class="label">p95 总耗时</span><strong>{{ formatMs(best?.browser.p95_duration_ms) }}</strong></div>
-        <div><span class="label">p95 首包</span><strong>{{ formatMs(best?.browser.p95_ttfb_ms) }}</strong></div>
+        <div><span class="label">Ping 成功率</span><strong>{{ pct(aggregate.pingSuccessRate) }}</strong></div>
+        <div><span class="label">平均 Ping</span><strong>{{ formatMs(aggregate.avgPing) }}</strong></div>
+        <div><span class="label">平均 TTFB</span><strong>{{ formatMs(aggregate.avgTTFB) }}</strong></div>
+        <div><span class="label">平均 TTFT</span><strong>{{ formatMs(aggregate.avgTTFT) }}</strong></div>
         <div><span class="label">{{ largestSize }} 下载</span><strong>{{ formatMbps(aggregate.download) }}</strong></div>
         <div><span class="label">{{ largestSize }} 上传</span><strong>{{ formatMbps(aggregate.upload) }}</strong></div>
       </section>

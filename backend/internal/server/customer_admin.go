@@ -508,9 +508,8 @@ func buildReports(reportID string, session *store.Session, req customerReportReq
 	customerEntrypoints := make([]map[string]any, 0, len(ids))
 	internalEntrypoints := make([]map[string]any, 0, len(ids))
 	allProblemCodes := []string{}
-	bestName := ""
-	bestScore := -1
-	bestLevel := "bad"
+	overallScore := -1
+	overallLevel := "bad"
 	requestIDs := []string{}
 	for _, id := range ids {
 		ep := entrypointMap[id]
@@ -561,14 +560,13 @@ func buildReports(reportID string, session *store.Session, req customerReportReq
 			}
 		}
 		allProblemCodes = appendUniqueStrings(allProblemCodes, codes...)
-		if metrics.Score > bestScore {
-			bestScore = metrics.Score
-			bestLevel = level
-			bestName = displayName
+		if metrics.Score > overallScore {
+			overallScore = metrics.Score
+			overallLevel = level
 		}
 	}
-	if bestScore < 0 {
-		bestScore = 0
+	if overallScore < 0 {
+		overallScore = 0
 	}
 	if len(allProblemCodes) == 0 {
 		allProblemCodes = []string{}
@@ -579,11 +577,8 @@ func buildReports(reportID string, session *store.Session, req customerReportReq
 		"report_id":      reportID,
 		"created_at":     now.Format(time.RFC3339),
 		"summary": map[string]any{
-			"level":              bestLevel,
-			"score":              bestScore,
-			"best_endpoint_name": bestName,
-			"main_message":       customerMainMessage(bestLevel),
-			"recommendations":    customerRecommendations(bestLevel, allProblemCodes),
+			"level": overallLevel,
+			"score": overallScore,
 		},
 		"client_env":  sanitizeClientEnv(req.ClientEnv),
 		"entrypoints": customerEntrypoints,
@@ -593,14 +588,12 @@ func buildReports(reportID string, session *store.Session, req customerReportReq
 		},
 	}
 	supportSummary := map[string]any{
-		"report_id":          reportID,
-		"user_id":            session.UserID,
-		"level":              bestLevel,
-		"score":              bestScore,
-		"best_endpoint_name": bestName,
-		"problem_codes":      allProblemCodes,
-		"safe_message":       customerMainMessage(bestLevel),
-		"internal_hint":      internalHint(allProblemCodes),
+		"report_id":     reportID,
+		"user_id":       session.UserID,
+		"level":         overallLevel,
+		"score":         overallScore,
+		"problem_codes": allProblemCodes,
+		"internal_hint": internalHint(allProblemCodes),
 	}
 	internalReport := map[string]any{
 		"schema_version": "2.0",
@@ -620,8 +613,8 @@ func buildReports(reportID string, session *store.Session, req customerReportReq
 		"support_summary":  supportSummary,
 	}
 	return customerReport, internalReport, supportSummary, reportMeta{
-		Level:        bestLevel,
-		Score:        bestScore,
+		Level:        overallLevel,
+		Score:        overallScore,
 		ProblemCodes: allProblemCodes,
 	}
 }
@@ -958,7 +951,6 @@ func adminReportItem(report store.Report) map[string]any {
 		"user_id":                report.UserID,
 		"level":                  firstNonEmpty(report.Level, stringMapValue(summary, "level")),
 		"score":                  report.Score,
-		"best_endpoint_name":     stringMapValue(summary, "best_endpoint_name"),
 		"problem_codes":          problemCodes,
 		"customer_share_enabled": report.ShareEnabled,
 	}
@@ -1102,30 +1094,6 @@ func sampleRequestIDs(samples []customerSample) []string {
 		}
 	}
 	return out
-}
-
-func customerMainMessage(level string) string {
-	switch level {
-	case "good":
-		return "当前网络访问正常"
-	case "warning":
-		return "当前网络存在波动"
-	default:
-		return "当前诊断发现异常"
-	}
-}
-
-func customerRecommendations(level string, codes []string) []string {
-	if containsString(codes, "CORS_PREFLIGHT_FAILED") {
-		return []string{"请联系支持并提供报告编号"}
-	}
-	if level == "good" {
-		return []string{"继续使用推荐入口"}
-	}
-	if level == "warning" {
-		return []string{"可切换推荐入口或稍后重试"}
-	}
-	return []string{"更换网络后重试", "联系支持并提供报告编号"}
 }
 
 func internalHint(codes []string) string {
