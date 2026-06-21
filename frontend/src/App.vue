@@ -6,6 +6,7 @@ import type { BootstrapResponse, EndpointResult, EntryPoint, IPInfo } from './ty
 
 type RunStatus = 'idle' | 'running' | 'done' | 'failed'
 type ViewMode = 'customer' | 'report' | 'admin'
+type TraceStatus = 'idle' | 'loading' | 'done' | 'failed'
 
 interface LiveMetrics {
   successRate: number | null
@@ -26,6 +27,17 @@ interface EndpointRunState {
   result?: EndpointResult
 }
 
+interface CloudflareTraceState {
+  status: TraceStatus
+  url: string
+  raw: string
+  values: Record<string, string>
+  error: string
+  fetched_at: string
+}
+
+const cloudflareTraceURL = 'https://sub2api.htao.ltd/cdn-cgi/trace'
+
 const loading = ref(true)
 const running = ref(false)
 const error = ref('')
@@ -41,6 +53,8 @@ const reportJSON = ref<any | null>(null)
 const progress = ref('')
 const customName = ref('')
 const customURL = ref('')
+const cloudflareTrace = ref<CloudflareTraceState>(blankCloudflareTrace())
+let cloudflareTraceLoad: Promise<void> | null = null
 
 const adminReports = ref<any[]>([])
 const adminTotal = ref(0)
@@ -68,23 +82,13 @@ const selectedEndpoints = computed(() => entrypoints.value.filter((endpoint) => 
 const selectedRows = computed(() => rows.value.filter((row) => row.selected))
 const sizeLabels = computed(() => normalizeSizes(boot.value?.probe.blob_sizes || ['64k', '1m', '5m', '20m']))
 const largestSize = computed(() => sizeLabels.value[sizeLabels.value.length - 1] || '20m')
-const aggregate = computed(() => {
-  const states = selectedIds.value.map((id) => endpointState(id)).filter((state) => state.samples.length > 0 || state.result)
-  return {
-    successRate: averageMetric(states.map((state) => state.metrics.successRate)),
-    pingSuccessRate: averageMetric(states.map((state) => state.metrics.pingSuccessRate)),
-    avgPing: averageMetric(states.map((state) => state.metrics.avgPing)),
-    avgTTFB: averageMetric(states.map((state) => state.metrics.avgTTFB)),
-    avgTTFT: averageMetric(states.map((state) => state.metrics.avgTTFT)),
-    download: averageMetric(states.map((state) => metricBySize(state.metrics.downloadBySize, largestSize.value))),
-    upload: averageMetric(states.map((state) => metricBySize(state.metrics.uploadBySize, largestSize.value))),
-  }
-})
 
 const report = computed(() => reportJSON.value || {})
 const reportSummary = computed(() => report.value.summary || {})
 const reportEntrypoints = computed<any[]>(() => Array.isArray(report.value.entrypoints) ? report.value.entrypoints : [])
 const reportClientEnv = computed<Record<string, string>>(() => report.value.client_env || {})
+const reportCloudflareTrace = computed(() => normalizeCloudflareTrace(report.value.cloudflare_trace || {}))
+const reportCloudflareTraceVisible = computed(() => hasCloudflareTrace(report.value.cloudflare_trace))
 const reportSupportRef = computed(() => report.value.support_reference || {})
 const adminCustomerReport = computed(() => adminReportDetail.value?.customer_report || {})
 const adminInternalReport = computed(() => adminReportDetail.value?.internal_report || {})
@@ -107,6 +111,7 @@ onMounted(async () => {
     applyTheme(boot.value.app?.theme || '')
     backendEntrypoints.value = normalizeEntrypoints(boot.value.entrypoints || [])
     selectAllEndpoints()
+    void ensureCloudflareTrace()
   } catch (e) {
     error.value = String((e as Error)?.message || e)
   } finally {
@@ -165,7 +170,8 @@ async function run() {
       }
     }
     if (results.value.length === 0) throw new Error('没有端点完成测试')
-    const payload = buildReport(runID, allSamples(), endpointLabels(), customEndpointPayload(), endpointNetInfoPayload())
+    await ensureCloudflareTrace()
+    const payload = buildReport(runID, allSamples(), endpointLabels(), customEndpointPayload(), endpointNetInfoPayload(), cloudflareTracePayload())
     const saved = await submitReport(token.value, payload)
     reportId.value = saved.report_id
     shareURL.value = saved.share_url
@@ -265,6 +271,148 @@ function notifyParent(summary: any) {
   } catch {
     // Parent notification is optional.
   }
+}
+
+function blankCloudflareTrace(status: TraceStatus = 'idle'): CloudflareTraceState {
+  return { status, url: cloudflareTraceURL, raw: '', values: {}, error: '', fetched_at: '' }
+}
+
+async function ensureCloudflareTrace() {
+  if (isReportPage.value || isAdminPage.value) return
+  if (cloudflareTrace.value.status === 'done' || cloudflareTrace.value.status === 'failed') return
+  if (!cloudflareTraceLoad) {
+    cloudflareTraceLoad = loadCloudflareTrace().finally(() => {
+      cloudflareTraceLoad = null
+    })
+  }
+  await cloudflareTraceLoad
+}
+
+async function loadCloudflareTrace() {
+  cloudflareTrace.value = { ...blankCloudflareTrace('loading'), fetched_at: new Date().toISOString() }
+  const controller = new AbortController()
+  const timeout = window.setTimeout(() => controller.abort(), 5000)
+  try {
+    const res = await fetch(cloudflareTraceURL, { cache: 'no-store', signal: controller.signal })
+    const raw = (await res.text()).trim()
+    if (!res.ok) throw new Error(`trace failed: ${res.status}`)
+    cloudflareTrace.value = {
+      status: 'done',
+      url: cloudflareTraceURL,
+      raw,
+      values: parseCloudflareTrace(raw),
+      error: '',
+      fetched_at: new Date().toISOString(),
+    }
+  } catch (e) {
+    cloudflareTrace.value = {
+      ...blankCloudflareTrace('failed'),
+      error: String((e as Error)?.message || e),
+      fetched_at: new Date().toISOString(),
+    }
+  } finally {
+    window.clearTimeout(timeout)
+  }
+}
+
+function parseCloudflareTrace(raw: string): Record<string, string> {
+  const values: Record<string, string> = {}
+  for (const line of raw.split(/\r?\n/)) {
+    const index = line.indexOf('=')
+    if (index <= 0) continue
+    const key = line.slice(0, index).trim()
+    const value = line.slice(index + 1).trim()
+    if (key && value) values[key] = value
+  }
+  return values
+}
+
+function cloudflareTracePayload(): Record<string, string> {
+  const state = cloudflareTrace.value
+  return {
+    url: state.url,
+    status: state.status,
+    fetched_at: state.fetched_at,
+    error: state.error,
+    raw: state.raw,
+    ...state.values,
+  }
+}
+
+function normalizeCloudflareTrace(value: any): CloudflareTraceState {
+  const rawValues = value && typeof value === 'object' ? value : {}
+  const values: Record<string, string> = {}
+  for (const [key, raw] of Object.entries(rawValues)) {
+    if (['url', 'status', 'fetched_at', 'error', 'raw'].includes(key)) continue
+    if (raw != null && String(raw).trim()) values[key] = String(raw).trim()
+  }
+  const raw = typeof rawValues.raw === 'string' ? rawValues.raw.trim() : ''
+  const parsed = raw ? parseCloudflareTrace(raw) : {}
+  const status = traceStatus(rawValues.status)
+  const hasData = raw || Object.keys(values).length > 0 || typeof rawValues.error === 'string'
+  return {
+    status: status === 'idle' && hasData ? 'done' : status,
+    url: typeof rawValues.url === 'string' && rawValues.url.trim() ? rawValues.url.trim() : cloudflareTraceURL,
+    raw,
+    values: { ...parsed, ...values },
+    error: typeof rawValues.error === 'string' ? rawValues.error.trim() : '',
+    fetched_at: typeof rawValues.fetched_at === 'string' ? rawValues.fetched_at.trim() : '',
+  }
+}
+
+function hasCloudflareTrace(value: any) {
+  if (!value || typeof value !== 'object') return false
+  return Object.values(value).some((item) => item != null && String(item).trim() !== '')
+}
+
+function traceStatus(value: unknown): TraceStatus {
+  return value === 'loading' || value === 'done' || value === 'failed' ? value : 'idle'
+}
+
+function traceStatusText(status: TraceStatus) {
+  if (status === 'loading') return '获取中'
+  if (status === 'done') return '已获取'
+  if (status === 'failed') return '失败'
+  return '待获取'
+}
+
+function traceRows(trace: CloudflareTraceState) {
+  const keys = orderedTraceKeys(trace.values)
+  const rows = [{ key: 'url', label: '来源', value: trace.url }]
+  if (trace.fetched_at) rows.push({ key: 'fetched_at', label: '获取时间', value: formatDate(trace.fetched_at) })
+  for (const key of keys) {
+    rows.push({ key, label: traceLabel(key), value: trace.values[key] })
+  }
+  return rows.filter((row) => row.value)
+}
+
+function orderedTraceKeys(values: Record<string, string>): string[] {
+  const order = ['ip', 'colo', 'loc', 'http', 'tls', 'warp', 'gateway', 'visit_scheme', 'h', 'ts', 'fl', 'sni', 'kex', 'sliver', 'rbi', 'uag']
+  const known = order.filter((key) => values[key])
+  const rest = Object.keys(values).filter((key) => !order.includes(key)).sort()
+  return [...known, ...rest]
+}
+
+function traceLabel(key: string) {
+  const labels: Record<string, string> = {
+    ip: '客户端 IP',
+    colo: 'CF 机房',
+    loc: '地区',
+    http: 'HTTP',
+    tls: 'TLS',
+    warp: 'WARP',
+    gateway: 'Gateway',
+    visit_scheme: '访问协议',
+    h: 'Host',
+    ts: 'Trace 时间',
+    fl: 'FL',
+    sni: 'SNI',
+    kex: 'KEX',
+    sliver: 'Sliver',
+    rbi: 'RBI',
+    uag: 'User-Agent',
+  }
+  return labels[key] || key
 }
 
 function normalizeEntrypoints(items: EntryPoint[]): EntryPoint[] {
@@ -624,35 +772,27 @@ function applyTheme(theme: string) {
         </div>
       </section>
 
-      <section class="endpoint-results">
-        <article v-for="ep in reportEntrypoints" :key="ep.endpoint_public_id" class="result-card">
-          <header>
-            <div>
-              <h2>{{ ep.display_name }}</h2>
-              <p>{{ ep.endpoint_public_id }}</p>
-            </div>
-            <span :class="['badge', ep.level]">{{ levelText(ep.level) }}</span>
-          </header>
-          <div class="metric-grid">
-            <div><span class="label">成功率</span><strong>{{ pct(ep.success_rate) }}</strong></div>
-            <div><span class="label">HTTP 失败率</span><strong>{{ pct(ep.http_loss_rate) }}</strong></div>
-            <div><span class="label">超时率</span><strong>{{ pct(ep.timeout_rate) }}</strong></div>
-            <div><span class="label">p50 / p95</span><strong>{{ formatMs(ep.latency_p50_ms) }} / {{ formatMs(ep.latency_p95_ms) }}</strong></div>
-            <div><span class="label">TTFB p95</span><strong>{{ formatMs(ep.ttfb_p95_ms) }}</strong></div>
-            <div><span class="label">下载 / 上传</span><strong>{{ formatMbps(ep.download_mbps) }} / {{ formatMbps(ep.upload_mbps) }}</strong></div>
-            <div><span class="label">流式首事件</span><strong>{{ formatMs(ep.stream_first_event_ms) }}</strong></div>
-            <div><span class="label">CORS / Timing</span><strong>{{ ep.cors_ok ? '正常' : '异常' }} / {{ ep.timing_detail_available ? '可用' : '不可用' }}</strong></div>
+      <section v-if="reportCloudflareTraceVisible" class="panel trace-panel">
+        <div class="panel-head">
+          <h2>Cloudflare Trace</h2>
+          <span>{{ traceStatusText(reportCloudflareTrace.status) }}</span>
+        </div>
+        <div class="trace-grid">
+          <div v-for="item in traceRows(reportCloudflareTrace)" :key="`report-trace-${item.key}`" :class="{ wide: item.key === 'url' || item.key === 'uag' }">
+            <span>{{ item.label }}</span>
+            <strong class="mono">{{ item.value }}</strong>
           </div>
-        </article>
+        </div>
+        <p v-if="reportCloudflareTrace.error" class="trace-error">{{ reportCloudflareTrace.error }}</p>
       </section>
 
-      <section class="panel network-panel">
+      <section class="panel endpoint-detail-panel">
         <div class="panel-head">
-          <h2>网络路径详情</h2>
+          <h2>端点详情</h2>
           <span>{{ reportEntrypoints.length }} 个入口</span>
         </div>
-        <div class="network-grid">
-          <article v-for="ep in reportEntrypoints" :key="`report-network-${ep.endpoint_public_id}`" class="network-card">
+        <div class="endpoint-detail-grid">
+          <article v-for="ep in reportEntrypoints" :key="`report-detail-${ep.endpoint_public_id}`" class="endpoint-detail-card report-detail-card">
             <header>
               <div>
                 <h2>{{ ep.display_name }}</h2>
@@ -660,7 +800,19 @@ function applyTheme(theme: string) {
               </div>
               <span :class="['badge', ep.level]">{{ levelText(ep.level) }}</span>
             </header>
-            <div class="path-section">
+
+            <div class="metric-grid endpoint-metrics report-metrics">
+              <div><span class="label">成功率</span><strong>{{ pct(ep.success_rate) }}</strong></div>
+              <div><span class="label">HTTP 失败率</span><strong>{{ pct(ep.http_loss_rate) }}</strong></div>
+              <div><span class="label">超时率</span><strong>{{ pct(ep.timeout_rate) }}</strong></div>
+              <div><span class="label">p50 / p95</span><strong>{{ formatMs(ep.latency_p50_ms) }} / {{ formatMs(ep.latency_p95_ms) }}</strong></div>
+              <div><span class="label">TTFB p95</span><strong>{{ formatMs(ep.ttfb_p95_ms) }}</strong></div>
+              <div><span class="label">下载 / 上传</span><strong>{{ formatMbps(ep.download_mbps) }} / {{ formatMbps(ep.upload_mbps) }}</strong></div>
+              <div><span class="label">流式首事件</span><strong>{{ formatMs(ep.stream_first_event_ms) }}</strong></div>
+              <div><span class="label">CORS / Timing</span><strong>{{ ep.cors_ok ? '正常' : '异常' }} / {{ ep.timing_detail_available ? '可用' : '不可用' }}</strong></div>
+            </div>
+
+            <div class="path-section dns-section">
               <span class="label">端点 DNS</span>
               <div v-if="ep.endpoint_dns?.length" class="ip-list">
                 <span v-for="ip in visibleIPs(ep.endpoint_dns)" :key="`${ep.endpoint_public_id}-dns-${ip.ip}`" class="ip-chip">
@@ -671,7 +823,8 @@ function applyTheme(theme: string) {
               </div>
               <strong v-else>-</strong>
             </div>
-            <div class="path-section">
+
+            <div class="path-section origin-section">
               <span class="label">源站回源 IP</span>
               <div v-if="ep.origin_peer?.ip" class="ip-list">
                 <span class="ip-chip accent">
@@ -869,14 +1022,19 @@ function applyTheme(theme: string) {
 
       <p v-if="error" class="error">{{ error }}</p>
 
-      <section class="summary insight-strip">
-        <div><span class="label">完整成功率</span><strong>{{ pct(aggregate.successRate) }}</strong></div>
-        <div><span class="label">Ping 成功率</span><strong>{{ pct(aggregate.pingSuccessRate) }}</strong></div>
-        <div><span class="label">平均 Ping</span><strong>{{ formatMs(aggregate.avgPing) }}</strong></div>
-        <div><span class="label">平均 TTFB</span><strong>{{ formatMs(aggregate.avgTTFB) }}</strong></div>
-        <div><span class="label">平均 TTFT</span><strong>{{ formatMs(aggregate.avgTTFT) }}</strong></div>
-        <div><span class="label">{{ largestSize }} 下载</span><strong>{{ formatMbps(aggregate.download) }}</strong></div>
-        <div><span class="label">{{ largestSize }} 上传</span><strong>{{ formatMbps(aggregate.upload) }}</strong></div>
+      <section class="panel trace-panel">
+        <div class="panel-head">
+          <h2>Cloudflare Trace</h2>
+          <span>{{ traceStatusText(cloudflareTrace.status) }}</span>
+        </div>
+        <div class="trace-grid">
+          <div v-for="item in traceRows(cloudflareTrace)" :key="`live-trace-${item.key}`" :class="{ wide: item.key === 'url' || item.key === 'uag' }">
+            <span>{{ item.label }}</span>
+            <strong class="mono">{{ item.value }}</strong>
+          </div>
+        </div>
+        <p v-if="cloudflareTrace.error" class="trace-error">{{ cloudflareTrace.error }}</p>
+        <p v-else-if="traceRows(cloudflareTrace).length === 0" class="trace-empty">等待 Cloudflare 返回 trace</p>
       </section>
 
       <section class="panel endpoint-detail-panel">
@@ -913,7 +1071,7 @@ function applyTheme(theme: string) {
               <div><span class="label">上传 {{ largestSize }}</span><strong>{{ formatMbps(metricBySize(row.state.metrics.uploadBySize, largestSize)) }}</strong></div>
             </div>
 
-            <div class="path-section">
+            <div class="path-section dns-section">
               <span class="label">端点 DNS</span>
               <div v-if="endpointDNS(row.endpoint, row.result).length" class="ip-list">
                 <span v-for="ip in visibleIPs(endpointDNS(row.endpoint, row.result))" :key="`${row.endpoint.id}-dns-${ip.ip}`" class="ip-chip">
@@ -925,7 +1083,7 @@ function applyTheme(theme: string) {
               <strong v-else>-</strong>
             </div>
 
-            <div class="path-section">
+            <div class="path-section origin-section">
               <span class="label">源站回源 IP</span>
               <div v-if="endpointOriginPeer(row.result)?.ip" class="ip-list">
                 <span class="ip-chip accent">
@@ -934,11 +1092,6 @@ function applyTheme(theme: string) {
                 </span>
               </div>
               <strong v-else>-</strong>
-            </div>
-
-            <div class="path-section">
-              <span class="label">诊断等级</span>
-              <span :class="['badge', row.result?.level]">{{ levelText(row.result?.level) }}</span>
             </div>
           </article>
         </div>

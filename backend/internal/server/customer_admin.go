@@ -438,6 +438,7 @@ type customerReportRequest struct {
 	SchemaVersion   string                   `json:"schema_version"`
 	RunID           string                   `json:"run_id"`
 	ClientEnv       map[string]string        `json:"client_env"`
+	CloudflareTrace map[string]string        `json:"cloudflare_trace"`
 	EndpointLabels  map[string]string        `json:"endpoint_labels"`
 	EndpointNetInfo map[string]endpointInfo  `json:"endpoint_netinfo"`
 	CustomEndpoints []customerCustomEndpoint `json:"custom_endpoints"`
@@ -572,6 +573,7 @@ func buildReports(reportID string, session *store.Session, req customerReportReq
 		allProblemCodes = []string{}
 	}
 	shortCode := "LG-" + strings.ToUpper(strings.ReplaceAll(randomToken(4), "_", ""))[:5]
+	cloudflareTrace := sanitizeCloudflareTrace(req.CloudflareTrace)
 	customerReport := map[string]any{
 		"schema_version": "2.0",
 		"report_id":      reportID,
@@ -580,8 +582,9 @@ func buildReports(reportID string, session *store.Session, req customerReportReq
 			"level": overallLevel,
 			"score": overallScore,
 		},
-		"client_env":  sanitizeClientEnv(req.ClientEnv),
-		"entrypoints": customerEntrypoints,
+		"client_env":       sanitizeClientEnv(req.ClientEnv),
+		"cloudflare_trace": cloudflareTrace,
+		"entrypoints":      customerEntrypoints,
 		"support_reference": map[string]any{
 			"report_id":  reportID,
 			"short_code": shortCode,
@@ -608,6 +611,7 @@ func buildReports(reportID string, session *store.Session, req customerReportReq
 			"filtered":              []any{},
 		},
 		"entrypoints":      internalEntrypoints,
+		"cloudflare_trace": cloudflareTrace,
 		"diag_request_ids": requestIDs,
 		"diagnosis":        internalDiagnosis(allProblemCodes),
 		"support_summary":  supportSummary,
@@ -1059,6 +1063,44 @@ func sanitizeClientEnv(env map[string]string) map[string]string {
 		}
 	}
 	return out
+}
+
+func sanitizeCloudflareTrace(trace map[string]string) map[string]string {
+	out := map[string]string{}
+	for rawKey, rawValue := range trace {
+		key := strings.ToLower(strings.TrimSpace(rawKey))
+		value := strings.TrimSpace(rawValue)
+		if key == "" || value == "" || !safeTraceKey(key) {
+			continue
+		}
+		maxLen := 512
+		if key == "raw" {
+			maxLen = 4096
+		}
+		out[key] = truncateRunes(value, maxLen)
+	}
+	return out
+}
+
+func safeTraceKey(key string) bool {
+	if len(key) > 40 {
+		return false
+	}
+	for _, ch := range key {
+		if (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '_' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func truncateRunes(value string, limit int) string {
+	runes := []rune(value)
+	if len(runes) <= limit {
+		return value
+	}
+	return string(runes[:limit])
 }
 
 func safeDisplayLabel(value string) string {

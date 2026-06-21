@@ -265,10 +265,6 @@ p {
   padding: 12px;
 }
 
-.insight-strip {
-  grid-template-columns: repeat(6, minmax(0, 1fr));
-}
-
 .label,
 .kv-grid span {
   color: var(--muted);
@@ -479,9 +475,52 @@ th {
   font-size: 12px;
 }
 
+.trace-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.trace-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.trace-grid > div {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-2);
+  min-width: 0;
+  padding: 10px 12px;
+}
+
+.trace-grid > div.wide {
+  grid-column: span 2;
+}
+
+.trace-grid span {
+  color: var(--muted);
+  display: block;
+  font-size: 12px;
+  margin-bottom: 6px;
+}
+
+.trace-grid strong {
+  display: block;
+  font-size: 13px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.trace-error,
+.trace-empty {
+  color: var(--muted);
+}
+
 .endpoint-detail-grid {
   display: grid;
   gap: 10px;
+  align-items: stretch;
   grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
 }
 
@@ -490,8 +529,13 @@ th {
   border-radius: 8px;
   display: grid;
   gap: 12px;
+  grid-template-rows: 96px 74px 250px 224px 96px;
   min-width: 0;
   padding: 12px;
+}
+
+.report-detail-card {
+  grid-template-rows: 96px 250px 224px 96px;
 }
 
 .endpoint-detail-card header {
@@ -499,6 +543,8 @@ th {
   display: flex;
   gap: 12px;
   justify-content: space-between;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .endpoint-detail-card header > div {
@@ -509,14 +555,20 @@ th {
 
 .endpoint-detail-card code {
   color: var(--muted);
+  display: block;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 12px;
+  line-height: 1.35;
+  max-height: 34px;
+  overflow: hidden;
   overflow-wrap: anywhere;
 }
 
 .endpoint-progress {
   display: grid;
   gap: 8px;
+  align-content: start;
+  min-width: 0;
 }
 
 .endpoint-progress strong {
@@ -524,12 +576,20 @@ th {
 }
 
 .endpoint-metrics {
+  align-content: start;
+  grid-auto-rows: minmax(48px, auto);
   grid-template-columns: repeat(3, minmax(0, 1fr));
+  overflow: hidden;
 }
 
 .endpoint-detail-card p {
   color: var(--muted);
   font-size: 12px;
+  line-height: 1.35;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .progress-track {
@@ -570,8 +630,23 @@ th {
 
 .path-section {
   border-top: 1px solid var(--border);
+  display: grid;
+  gap: 8px;
+  align-content: start;
   min-width: 0;
+  overflow: hidden;
   padding-top: 10px;
+}
+
+.endpoint-detail-card .dns-section .ip-list {
+  max-height: 176px;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.endpoint-detail-card .origin-section .ip-list {
+  max-height: 48px;
+  overflow: hidden;
 }
 
 .ip-list {
@@ -696,6 +771,25 @@ th {
     grid-template-columns: 1fr;
   }
 
+  .endpoint-detail-card,
+  .report-detail-card {
+    grid-template-rows: none;
+  }
+
+  .endpoint-detail-card .dns-section .ip-list,
+  .endpoint-detail-card .origin-section .ip-list {
+    max-height: none;
+    overflow: visible;
+  }
+
+  .endpoint-detail-card code,
+  .endpoint-detail-card p,
+  .endpoint-metrics,
+  .path-section {
+    max-height: none;
+    overflow: visible;
+  }
+
   .inventory-panel {
     position: static;
   }
@@ -705,8 +799,8 @@ th {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .insight-strip {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+  .trace-grid > div.wide {
+    grid-column: auto;
   }
 }
 

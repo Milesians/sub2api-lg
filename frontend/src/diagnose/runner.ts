@@ -245,11 +245,13 @@ export function buildReport(
   endpointLabels: Record<string, string> = {},
   customEndpoints: Array<{ endpoint_public_id: string; display_name: string; probe_base_url: string }> = [],
   endpointNetInfo: Record<string, { origin_peer?: IPInfo; dns_records?: IPInfo[] }> = {},
+  cloudflareTrace: Record<string, string> = {},
 ) {
   return {
     schema_version: '2.0',
     run_id: runID,
     client_env: clientEnv(),
+    cloudflare_trace: cloudflareTrace,
     endpoint_labels: endpointLabels,
     endpoint_netinfo: endpointNetInfo,
     custom_endpoints: customEndpoints,
