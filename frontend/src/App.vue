@@ -57,7 +57,7 @@ const isReportPage = computed(() => viewMode === 'report')
 const isAdminPage = computed(() => viewMode === 'admin')
 const token = computed(() => boot.value?.session_token || sessionStorage.getItem('sub2api_lg_session_token') || '')
 const adminToken = computed(() => boot.value?.session_token || sessionStorage.getItem('sub2api_lg_admin_session_token') || '')
-const entrypoints = computed(() => [...backendEntrypoints.value, ...customEntrypoints.value])
+const entrypoints = computed(() => orderedEntrypoints([...backendEntrypoints.value, ...customEntrypoints.value]))
 const rows = computed(() => entrypoints.value.map((endpoint) => ({
   endpoint,
   selected: selectedIds.value.includes(endpoint.id),
@@ -276,6 +276,20 @@ function normalizeEntrypoints(items: EntryPoint[]): EntryPoint[] {
   }))
 }
 
+function orderedEntrypoints(items: EntryPoint[]): EntryPoint[] {
+  return items
+    .map((endpoint, index) => ({ endpoint, index }))
+    .sort((a, b) => {
+      const aOrder = typeof a.endpoint.display_order === 'number' && Number.isFinite(a.endpoint.display_order) ? a.endpoint.display_order : null
+      const bOrder = typeof b.endpoint.display_order === 'number' && Number.isFinite(b.endpoint.display_order) ? b.endpoint.display_order : null
+      if (aOrder != null && bOrder != null && aOrder !== bOrder) return aOrder - bOrder
+      if (aOrder != null && bOrder == null) return -1
+      if (aOrder == null && bOrder != null) return 1
+      return a.index - b.index
+    })
+    .map((item) => item.endpoint)
+}
+
 function buildCustomEndpoint(rawURL: string, rawName: string, publicPath: string): EntryPoint {
   const raw = rawURL.trim()
   if (!raw) throw new Error('请输入自定义端点地址')
@@ -468,6 +482,10 @@ function averageMetric(values: Array<number | null | undefined>): number | null 
 
 function displayName(endpoint: EntryPoint): string {
   return endpoint.display_name || endpoint.name || endpoint.id
+}
+
+function endpointURL(endpoint: EntryPoint): string {
+  return endpoint.probe_base_url || endpoint.lg_base_url || endpoint.base_url || endpoint.raw_value || endpoint.origin || endpoint.host || '-'
 }
 
 function statusText(status: RunStatus) {
@@ -829,6 +847,7 @@ function applyTheme(theme: string) {
             <span>
               <strong>{{ displayName(row.endpoint) }}</strong>
               <small>{{ row.endpoint.description || '浏览器诊断入口' }}</small>
+              <small class="endpoint-url">{{ endpointURL(row.endpoint) }}</small>
             </span>
             <span :class="['run-status', row.state.status]">{{ statusText(row.state.status) }}</span>
             <button v-if="row.endpoint.source === 'custom'" class="ghost small" :disabled="running" type="button" @click.prevent.stop="removeCustomEndpoint(row.endpoint.id)">移除</button>
@@ -848,75 +867,39 @@ function applyTheme(theme: string) {
         <div><span class="label">{{ largestSize }} 上传</span><strong>{{ formatMbps(aggregate.upload) }}</strong></div>
       </section>
 
-      <section class="panel performance-panel">
+      <section class="panel endpoint-detail-panel">
         <div class="panel-head">
-          <h2>端点性能对比</h2>
+          <h2>端点详情</h2>
           <span>{{ selectedRows.length }} 个入口</span>
         </div>
-        <div class="table-wrap compact-table">
-          <table class="performance-table">
-            <thead>
-              <tr>
-                <th>入口</th>
-                <th>状态</th>
-                <th>成功率</th>
-                <th>Ping</th>
-                <th>TTFB</th>
-                <th>TTFT</th>
-                <th v-for="size in sizeLabels" :key="`download-head-${size}`">下载 {{ size }}</th>
-                <th>{{ largestSize }} 上传</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="row in selectedRows" :key="`perf-${row.endpoint.id}`">
-                <td>
-                  <strong>{{ displayName(row.endpoint) }}</strong>
-                  <span>{{ row.endpoint.description || '浏览器诊断入口' }}</span>
-                </td>
-                <td><span :class="['run-status', row.state.status]">{{ statusText(row.state.status) }}</span></td>
-                <td>{{ pct(row.state.metrics.successRate) }}</td>
-                <td>{{ formatMs(row.state.metrics.avgPing) }}</td>
-                <td>{{ formatMs(row.state.metrics.avgTTFB) }}</td>
-                <td>{{ formatMs(row.state.metrics.avgTTFT) }}</td>
-                <td v-for="size in sizeLabels" :key="`${row.endpoint.id}-perf-download-${size}`">{{ formatMbps(metricBySize(row.state.metrics.downloadBySize, size)) }}</td>
-                <td>{{ formatMbps(metricBySize(row.state.metrics.uploadBySize, largestSize)) }}</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      <section class="panel progress-panel">
-        <div class="panel-head">
-          <h2>测试进度</h2>
-          <span>{{ progress || statusText(running ? 'running' : 'idle') }}</span>
-        </div>
-        <div class="progress-list">
-          <article v-for="row in selectedRows" :key="`progress-${row.endpoint.id}`" class="progress-item">
-            <div>
-              <strong>{{ displayName(row.endpoint) }}</strong>
-              <span>{{ row.state.current }}</span>
-            </div>
-            <div class="progress-track"><span :style="{ width: `${progressPercent(row)}%` }"></span></div>
-            <span :class="['run-status', row.state.status]">{{ statusText(row.state.status) }}</span>
-          </article>
-        </div>
-      </section>
-
-      <section class="panel network-panel">
-        <div class="panel-head">
-          <h2>网络路径详情</h2>
-          <span>DNS / ASN / 回源</span>
-        </div>
-        <div class="network-grid">
-          <article v-for="row in selectedRows" :key="`network-${row.endpoint.id}`" class="network-card">
+        <div class="endpoint-detail-grid">
+          <article v-for="row in selectedRows" :key="`endpoint-detail-${row.endpoint.id}`" class="endpoint-detail-card">
             <header>
               <div>
                 <h2>{{ displayName(row.endpoint) }}</h2>
                 <p>{{ row.endpoint.description || '浏览器诊断入口' }}</p>
+                <code>{{ endpointURL(row.endpoint) }}</code>
               </div>
-              <span :class="['badge', row.result?.level]">{{ levelText(row.result?.level) }}</span>
+              <span :class="['run-status', row.state.status]">{{ statusText(row.state.status) }}</span>
             </header>
+
+            <div class="endpoint-progress">
+              <div>
+                <span class="label">当前进度</span>
+                <strong>{{ row.state.current }}</strong>
+              </div>
+              <div class="progress-track"><span :style="{ width: `${progressPercent(row)}%` }"></span></div>
+            </div>
+
+            <div class="metric-grid endpoint-metrics">
+              <div><span class="label">完整成功率</span><strong>{{ pct(row.state.metrics.successRate) }}</strong></div>
+              <div><span class="label">Ping 成功率</span><strong>{{ pct(row.state.metrics.pingSuccessRate) }}</strong></div>
+              <div><span class="label">平均 Ping</span><strong>{{ formatMs(row.state.metrics.avgPing) }}</strong></div>
+              <div><span class="label">平均 TTFB</span><strong>{{ formatMs(row.state.metrics.avgTTFB) }}</strong></div>
+              <div><span class="label">平均 TTFT</span><strong>{{ formatMs(row.state.metrics.avgTTFT) }}</strong></div>
+              <div v-for="size in sizeLabels" :key="`${row.endpoint.id}-detail-download-${size}`"><span class="label">下载 {{ size }}</span><strong>{{ formatMbps(metricBySize(row.state.metrics.downloadBySize, size)) }}</strong></div>
+              <div><span class="label">上传 {{ largestSize }}</span><strong>{{ formatMbps(metricBySize(row.state.metrics.uploadBySize, largestSize)) }}</strong></div>
+            </div>
 
             <div class="path-section">
               <span class="label">端点 DNS</span>
@@ -939,6 +922,11 @@ function applyTheme(theme: string) {
                 </span>
               </div>
               <strong v-else>-</strong>
+            </div>
+
+            <div class="path-section">
+              <span class="label">诊断等级</span>
+              <span :class="['badge', row.result?.level]">{{ levelText(row.result?.level) }}</span>
             </div>
           </article>
         </div>

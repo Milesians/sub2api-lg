@@ -33,6 +33,25 @@ func TestNormalizeUsesBaseURLAndPublicPath(t *testing.T) {
 	}
 }
 
+func TestNormalizePreservesConfiguredOrder(t *testing.T) {
+	cfg := config.Default()
+	cfg.App.Env = "development"
+	raw := []RawEndpoint{
+		{Source: "admin_custom", Name: "Z last alphabetically", RawValue: "https://z.example.com/v1"},
+		{Source: "admin_custom", Name: "A first alphabetically", RawValue: "https://a.example.com/v1"},
+		{Source: "admin_custom", Name: "M middle alphabetically", RawValue: "https://m.example.com/v1"},
+	}
+	got := Normalize(raw, cfg)
+	if len(got) != 3 {
+		t.Fatalf("len = %d, want 3", len(got))
+	}
+	for i, want := range []string{"Z last alphabetically", "A first alphabetically", "M middle alphabetically"} {
+		if got[i].Name != want {
+			t.Fatalf("entrypoint %d name = %q, want %q", i, got[i].Name, want)
+		}
+	}
+}
+
 func TestCollectSettingsKeepsLegacyFieldsInsideAdminLayer(t *testing.T) {
 	settings := &adminclient.SystemSettings{
 		APIBaseURL: "https://legacy-default.example.com/v1",

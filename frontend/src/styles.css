@@ -345,6 +345,10 @@ strong {
   white-space: nowrap;
 }
 
+.endpoint-url {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
 .endpoint-results {
   grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
 }
@@ -439,21 +443,6 @@ table {
   width: 100%;
 }
 
-.compact-table table {
-  min-width: 1040px;
-}
-
-.performance-table td:first-child {
-  min-width: 190px;
-}
-
-.performance-table td:first-child span {
-  color: var(--muted);
-  display: block;
-  font-size: 12px;
-  margin-top: 3px;
-}
-
 th,
 td {
   border-bottom: 1px solid var(--border);
@@ -490,36 +479,55 @@ th {
   font-size: 12px;
 }
 
-.progress-list {
+.endpoint-detail-grid {
   display: grid;
-  gap: 8px;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
 }
 
-.progress-item {
-  align-items: center;
+.endpoint-detail-card {
   border: 1px solid var(--border);
   border-radius: 8px;
   display: grid;
   gap: 12px;
-  grid-template-columns: minmax(160px, 240px) minmax(0, 1fr) auto;
   min-width: 0;
-  padding: 10px 12px;
+  padding: 12px;
 }
 
-.progress-item > div:first-child {
+.endpoint-detail-card header {
+  align-items: start;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.endpoint-detail-card header > div {
   display: grid;
-  gap: 3px;
+  gap: 4px;
   min-width: 0;
 }
 
-.progress-item > div:first-child strong,
-.progress-item > div:first-child span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.endpoint-detail-card code {
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  overflow-wrap: anywhere;
 }
 
-.progress-item > div:first-child span {
+.endpoint-progress {
+  display: grid;
+  gap: 8px;
+}
+
+.endpoint-progress strong {
+  display: block;
+}
+
+.endpoint-metrics {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.endpoint-detail-card p {
   color: var(--muted);
   font-size: 12px;
 }
@@ -670,8 +678,7 @@ th {
     flex-direction: column;
   }
 
-  .control-row,
-  .progress-item {
+  .control-row {
     grid-template-columns: 1fr;
   }
 
@@ -684,7 +691,8 @@ th {
   }
 
   .admin-layout,
-  .endpoint-results {
+  .endpoint-results,
+  .endpoint-detail-grid {
     grid-template-columns: 1fr;
   }
 
@@ -705,7 +713,8 @@ th {
 @media (max-width: 560px) {
   .summary,
   .metric-grid,
-  .kv-grid {
+  .kv-grid,
+  .endpoint-metrics {
     grid-template-columns: 1fr;
   }
 
@@ -717,5 +726,9 @@ th {
   .endpoint-choice button {
     grid-column: 2;
     justify-self: start;
+  }
+
+  .endpoint-detail-card header {
+    display: grid;
   }
 }

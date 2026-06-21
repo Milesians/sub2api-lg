@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -214,9 +213,6 @@ func Normalize(raw []RawEndpoint, cfg *config.Config) []EntryPoint {
 			Enabled:     true,
 		})
 	}
-	sort.SliceStable(out, func(i, j int) bool {
-		return out[i].Name < out[j].Name
-	})
 	return out
 }
 
