@@ -742,6 +742,7 @@ func (s *Server) safeEntrypoints(ctx context.Context, snapshot *entrypoints.Snap
 			"name":               ep.Name,
 			"display_order":      i + 1,
 			"description":        ep.Description,
+			"display_url":        ep.BaseURL,
 			"probe_base_url":     ep.LGBaseURL,
 			"dns_records":        s.endpointDNSInfo(ctx, ep.Host),
 			"capabilities":       []string{"meta", "ping", "blob", "upload", "stream", "headers"},

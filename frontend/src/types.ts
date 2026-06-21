@@ -36,6 +36,7 @@ export interface EntryPoint {
   description: string
   display_name?: string
   display_order?: number
+  display_url?: string
   probe_base_url?: string
   raw_value?: string
   base_url?: string

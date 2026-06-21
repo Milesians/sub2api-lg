@@ -306,6 +306,7 @@ function buildCustomEndpoint(rawURL: string, rawName: string, publicPath: string
     parsed.pathname = `${path}${cleanPublicPath}`.replace(/\/+/g, '/')
   }
   const probeBaseURL = parsed.toString().replace(/\/+$/, '')
+  const displayURL = stripPublicPath(probeBaseURL, cleanPublicPath)
   const id = `custom_${stableHash(probeBaseURL)}`
   const name = safeCustomName(rawName) || `自定义入口 ${customEntrypoints.value.length + 1}`
   return {
@@ -314,10 +315,21 @@ function buildCustomEndpoint(rawURL: string, rawName: string, publicPath: string
     name,
     display_name: name,
     description: '自定义入口 · 仅本次浏览器测试',
+    display_url: displayURL,
     probe_base_url: probeBaseURL,
     source: 'custom',
     capabilities: ['ping', 'blob', 'upload', 'stream'],
   }
+}
+
+function stripPublicPath(rawURL: string, publicPath: string): string {
+  const parsed = new URL(rawURL)
+  const cleanPublicPath = publicPath.startsWith('/') ? publicPath : `/${publicPath}`
+  const normalizedPath = parsed.pathname.replace(/\/+$/, '')
+  if (normalizedPath === cleanPublicPath || normalizedPath.endsWith(cleanPublicPath)) {
+    parsed.pathname = normalizedPath.slice(0, -cleanPublicPath.length) || '/'
+  }
+  return parsed.toString().replace(/\/+$/, '')
 }
 
 function endpointLabels(): Record<string, string> {
@@ -485,7 +497,7 @@ function displayName(endpoint: EntryPoint): string {
 }
 
 function endpointURL(endpoint: EntryPoint): string {
-  return endpoint.probe_base_url || endpoint.lg_base_url || endpoint.base_url || endpoint.raw_value || endpoint.origin || endpoint.host || '-'
+  return endpoint.display_url || endpoint.base_url || endpoint.raw_value || endpoint.origin || endpoint.host || '-'
 }
 
 function statusText(status: RunStatus) {
